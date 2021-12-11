@@ -102,6 +102,28 @@ impl AlignmentParameters {
     }
 }
 
+#[derive(Clone)]
+pub struct AllAlignParams {
+    parameters: Vec<AlignmentParameters>,
+    ln_parameters: Vec<LnAlignmentParameters>,
+}
+
+impl AllAlignParams {
+    pub fn get_params(&self, cluster_num: usize) -> &AlignmentParameters {
+        &self.parameters[cluster_num]
+    }
+
+    pub fn get_ln_params(&self, cluster_num: usize) -> &LnAlignmentParameters {
+        &self.ln_parameters[cluster_num]
+    }
+
+    pub fn new(vec_parameters: &Vec<AlignmentParameters>) -> AllAlignParams {
+        AllAlignParams {parameters: vec_parameters.clone(), ln_parameters: vec_parameters.iter().map(|parameter| parameter.ln()).collect()}
+    }
+}
+
+// ToDo index(Bamfile), read -> cluster_num
+
 pub fn forward_algorithm_non_numerically_stable(
     v: &Vec<char>,
     w: &Vec<char>,

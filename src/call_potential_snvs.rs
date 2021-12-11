@@ -9,6 +9,8 @@ use bio::stats::{LogProb, Prob};
 use rust_htslib::bam;
 use rust_htslib::bam::pileup::Indel;
 use rust_htslib::bam::Read;
+use rust_htslib::bam::IndexedReader;
+use rust_htslib::bam::pileup::Pileups;
 
 use errors::*;
 //use std::str;
@@ -18,6 +20,8 @@ use errors::*;
 use genotype_probs::*;
 //use spoa::poa_multiple_sequence_alignment;
 use realignment::LnAlignmentParameters;
+use realignment::AllAlignParams;
+
 use util::*;
 // {FragCall, GenotypePriors, LnAlignmentParameters, GenomicInterval, Var, VarList, parse_target_names, u8_to_string};
 use variants_and_fragments::*;
@@ -68,21 +72,44 @@ static VERBOSE: bool = false; //true;
 /// - ```IndexedBamPileupQueryPositionError```: error accessing the query position from the BAM pileup
 /// - Error calculating genotype posteriors for reference genotype qual calculation (usually having to
 ///          do with accessing invalid genotypes)
+
+struct MultiplePileup {
+    bam_files: Vec<IndexedReader>,
+    bam_pileups: Vec<Pileups<IndexedReader>>
+}
+
+impl MultiplePileup {
+    pub fn new(bam_names: &Vec<String>, interval: GenomicInterval) -> Result<MultiplePileup> {
+        let mut bam_files: Vec<IndexedReader> = 
+                            bam_names
+                            .iter()
+                            .map(|name| IndexedReader::from_path(name)
+                                        .chain_err(|| ErrorKind::IndexedBamOpenError)?)
+                            .collect();
+        
+        let mut bam_pileups: Vec<Pileups<IndexedReader>> = 
+                            bam_files
+                            .iter()
+                            .map(|bam_ix| bam_ix
+                                            .fetch(interval.));
+    }
+}
+
 pub fn call_potential_snvs(
-    bam_file: &String,
+    bam_files_iteraction: &BamFileInteraction,
     fasta_file: &String,
-    interval: &Option<GenomicInterval>,
+    intervals: &Option<Vec<GenomicInterval>>,
+    // interval: &Option<GenomicInterval>,
     genotype_priors: &GenotypePriors,
     min_coverage: u32,
     max_coverage: u32,
     min_alt_count: usize,
     min_alt_frac: f64,
     min_mapq: u8,
-    ln_align_params: LnAlignmentParameters,
+    all_alignment_parameters: &AllAlignParams,
     potential_snv_cutoff: LogProb,
 ) -> Result<VarList> {
-    // the list of target (contig) names from the bam file
-    let target_names = parse_target_names(&bam_file)?;
+
     let bases = ['A', 'C', 'G', 'T', 'N'];
 
     let mut fasta = fasta::IndexedReader::from_file(&fasta_file)
@@ -131,7 +158,15 @@ pub fn call_potential_snvs(
     // then just iterating over all of ```bam_ix.pileup()```) is the following:
     // if an indexed reader is used, and fetch is never called, pileup() hangs.
 
-    let interval_lst: Vec<GenomicInterval> = get_interval_lst(bam_file, interval)?;
+    // let mut interval_lst: Vec<GenomicInterval>;
+    // for (bam_file, interval) in bamfile_names.iter().zip(intervals.iter()) {
+    //     for value in get_interval_lst(bam_file, interval)? {
+    //         interval_lst.push(value);
+    //     }
+    // }
+
+    let interval_lst: Vec<GenomicInterval> = get_interval_lst(bam_files_iteraction, intervals)?;
+    
     let mut bam_ix =
         bam::IndexedReader::from_path(bam_file).chain_err(|| ErrorKind::IndexedBamOpenError)?;
 
@@ -320,6 +355,8 @@ pub fn call_potential_snvs(
             // we dereference these so that they are f64 but in natural log space
             // we want to be able to multiply them by some integer (raise to power),
             // representing multiplying the independent probability that many times
+
+            // ??? Get probs by position?
             let p_miscall = *ln_align_params.emission_probs.not_equal;
             let p_call = *LogProb::ln_one_minus_exp(&ln_align_params.emission_probs.not_equal);
             let ln_half = *LogProb::from(Prob(0.5)); // ln(0.5)

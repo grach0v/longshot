@@ -6,6 +6,7 @@ use clap::ArgMatches;
 use errors::*;
 use rust_htslib::bam;
 use rust_htslib::bam::Read;
+use hashbrown::HashMap;
 
 pub static INDEX_FREQ: usize = 1000;
 pub static MAX_VCF_QUAL: f64 = 500.0;
@@ -97,13 +98,12 @@ pub fn parse_flag(argmatch: &ArgMatches, arg_name: &str) -> Result<bool> {
 
 // this is really ugly. TODO a less verbose implementation
 pub fn parse_region_string(
-    region_string: Option<&str>,
-    bamfile_name: &String,
-) -> Result<Option<GenomicInterval>> {
-    let bam = bam::Reader::from_path(bamfile_name).chain_err(|| ErrorKind::BamOpenError)?;
+    region_string: &str,
+    chrom_lengths: &HashMap<String, u32>
+) -> Result<GenomicInterval> {
 
     match region_string {
-        Some(r) if r.contains(":") && r.contains("-") => {
+        r if r.contains(":") && r.contains("-") => {
             let split1: Vec<&str> = r.split(":").collect();
             if split1.len() != 2 {
                 bail!("Invalid format for region. Please use <chrom> or <chrom:start-stop>");
@@ -120,26 +120,14 @@ pub fn parse_region_string(
                 .parse::<u32>()
                 .chain_err(|| "Invalid position value specified in region string.")?; // read in as 1-based inclusive range
 
-            let mut tid: u32 = 0;
-            for name in bam.header().target_names() {
-                if u8_to_string(name)? == iv_chrom {
-                    break;
-                }
-                tid += 1;
-            }
-            if tid as usize == bam.header().target_names().len() {
-                bail!("Chromosome name for region is not in BAM file.");
-            }
 
-            let tlen = bam
-                .header()
-                .target_len(tid)
-                .chain_err(|| ErrorKind::BamHeaderTargetLenAccessError)?;
+            let tlen = chrom_lengths[&iv_chrom];
 
             ensure!(
                 iv_start > 0,
                 "--region start position must be greater than 0."
             );
+
             ensure!(
                 iv_start < tlen,
                 "--region start position exceeds the length of the contig."
@@ -149,44 +137,32 @@ pub fn parse_region_string(
                 "--region end position exceeds the length of the contig."
             );
 
-            Ok(Some(GenomicInterval {
-                tid: tid,
+            Ok(GenomicInterval {
                 chrom: iv_chrom,
                 start_pos: iv_start - 1, // convert to 0-based inclusive range
                 end_pos: iv_end - 1,     // convert to 0-based inclusive range
-            }))
+            })
         }
-        Some(r) => {
+        r => {
             let r_str = r.to_string();
             let mut tid: u32 = 0;
-            for name in bam.header().target_names() {
-                if u8_to_string(name)? == r_str {
-                    break;
-                }
-                tid += 1;
-            }
-            if tid as usize == bam.header().target_names().len() {
-                bail!("Chromosome name for region is not in BAM file.");
-            }
 
-            let tlen = bam
-                .header()
-                .target_len(tid)
-                .chain_err(|| ErrorKind::BamHeaderTargetLenAccessError)?;
-            Ok(Some(GenomicInterval {
-                tid: tid,
+            let tlen = chrom_lengths[&r_str];
+
+            Ok(GenomicInterval {
                 chrom: r_str,
                 start_pos: 0,
                 end_pos: tlen - 1,
-            }))
+            })
         }
-        None => Ok(None),
     }
 }
 
 #[derive(Clone)]
+
+// Enum ?
+// Save max number and then correct
 pub struct GenomicInterval {
-    pub tid: u32,
     pub chrom: String,
     // chromosome name
     pub start_pos: u32,
@@ -200,6 +176,80 @@ pub struct DensityParameters {
     pub n: usize,
     pub len: usize,
     pub gq: f64,
+}
+
+pub struct BamFileInteraction {
+    pub file_names: Vec<String>,
+    pub open_files: Vec<rust_htslib::bam::Reader>,
+    pub chrom_to_tid: HashMap<String, Vec<i32>>,
+    pub chrom_to_len: HashMap<String, u32>,
+    pub file_index_tid_to_chrom: Vec<Vec<String>>,
+    pub target_names: Vec<String>
+}
+
+impl BamFileInteraction {
+    pub fn new(names: Vec<String>) -> Result<BamFileInteraction> {
+        // Create open_files
+        let bam_files: Vec<rust_htslib::bam::Reader> = names
+            .iter()
+            .map(|name| bam::Reader::from_path(name)
+                .chain_err(|| ErrorKind::BamOpenError))
+            .collect::<_>().ok();
+
+        // Create chrom_to_tid
+        // And chrom_to_len
+        // and file_index_tid_to_chrom
+
+        let mut chrom_to_tid: HashMap<String, Vec<i32>>;
+        let mut chrom_to_len: HashMap<String, u32>;
+        let mut file_index_tid_to_chrom: Vec<Vec<String>>;
+
+        for (bam, bam_index) in bam_files.into_iter().zip(0 .. bam_files.len()) {
+            let cur_names = parse_target_names_opened(&bam)?;
+            file_index_tid_to_chrom.push(vec![]);
+
+            for chrom in chrom_to_tid.keys() {
+                let Some(vec) = chrom_to_tid.get(chrom);
+                vec.push(-1);
+            }
+
+            for (chrom, chrom_index) in cur_names.into_iter().zip(0 .. cur_names.len()) {
+                file_index_tid_to_chrom[file_index_tid_to_chrom.len() - 1].push(chrom);
+
+                let tlen = bam
+                    .header()
+                    .target_len(chrom_index as u32)
+                    .chain_err(|| ErrorKind::BamHeaderTargetLenAccessError)?;
+
+                if let (Some(vec), Some(&len)) = (chrom_to_tid.get(&chrom), chrom_to_len.get(&chrom)) {
+                    vec[vec.len() - 1] = chrom_index as i32;
+
+                    ensure! (
+                        tlen == len,
+                        "--different chrom lengths of one chromosome."
+                    );
+
+                } else {
+                    let mut new_vec = vec![-1; bam_index];
+                    new_vec.push(chrom_index as i32);
+                    chrom_to_tid.insert(chrom, new_vec);
+
+                    chrom_to_len.insert(chrom, tlen);
+                }
+            }
+        }
+
+        Ok(
+            BamFileInteraction {
+                file_names: names,
+                open_files: bam_files,
+                chrom_to_tid: chrom_to_tid,
+                chrom_to_len: chrom_to_len,
+                file_index_tid_to_chrom: file_index_tid_to_chrom,
+                target_names: chrom_to_len.keys().cloned().collect()
+            }
+        )
+    }
 }
 
 pub fn u8_to_string(u: &[u8]) -> Result<String> {
@@ -234,7 +284,10 @@ pub fn has_non_acgt(s: &String) -> bool {
     false
 }
 
+
 pub fn parse_target_names(bam_file: &String) -> Result<Vec<String>> {
+    // TODO replace with std::str_from_utf8 
+
     let bam = bam::Reader::from_path(bam_file).chain_err(|| ErrorKind::BamOpenError)?;
     let header_view = bam.header();
     let target_names_dec: Vec<&[u8]> = header_view.target_names();
@@ -253,27 +306,55 @@ pub fn parse_target_names(bam_file: &String) -> Result<Vec<String>> {
     Ok(target_names)
 }
 
-pub fn get_whole_genome_intervals(bam_file: &String) -> Result<Vec<GenomicInterval>> {
-    let bam = bam::Reader::from_path(bam_file).chain_err(|| ErrorKind::BamOpenError)?;
+pub fn parse_target_names_opened(bam: &rust_htslib::bam::Reader) -> Result<Vec<String>> {
+    // TODO replace with std::str_from_utf8 
+
+    // let bam = bam::Reader::from_path(bam_file).chain_err(|| ErrorKind::BamOpenError)?;
     let header_view = bam.header();
     let target_names_dec: Vec<&[u8]> = header_view.target_names();
-    let mut intervals: Vec<GenomicInterval> = vec![];
+    let mut target_names: Vec<String> = vec![];
 
-    for (tid, t_name_dec) in target_names_dec.iter().enumerate() {
+    for t_name_dec in target_names_dec {
         let mut name_vec: Vec<char> = vec![];
-        for decr in t_name_dec.iter() {
+        for decr in t_name_dec {
             let dec: u8 = *decr;
             name_vec.push(dec as char);
         }
         let name_string: String = name_vec.into_iter().collect();
+        target_names.push(name_string);
+    }
+
+    Ok(target_names)
+}
+
+
+pub fn get_whole_genome_intervals(bam_files_iteraction: &BamFileInteraction) -> Result<Vec<GenomicInterval>> {
+
+    let mut intervals: Vec<GenomicInterval> = vec![];
+
+    // for (tid, t_name_dec) in target_names_dec.iter().enumerate() {
+    //     let mut name_vec: Vec<char> = vec![];
+    //     for decr in t_name_dec.iter() {
+    //         let dec: u8 = *decr;
+    //         name_vec.push(dec as char);
+    //     }
+    //     let name_string: String = name_vec.into_iter().collect();
+    //     intervals.push(GenomicInterval {
+    //         // tid: tid as u32,
+    //         chrom: name_string,
+    //         start_pos: 0,
+    //         end_pos: header_view
+    //             .target_len(tid as u32)
+    //             .chain_err(|| format!("Error accessing target len for tid {}", tid))?
+    //             - 1,
+    //     });
+    // }
+
+    for chrom in bam_files_iteraction.target_names {
         intervals.push(GenomicInterval {
-            tid: tid as u32,
-            chrom: name_string,
+            chrom: chrom,
             start_pos: 0,
-            end_pos: header_view
-                .target_len(tid as u32)
-                .chain_err(|| format!("Error accessing target len for tid {}", tid))?
-                - 1,
+            end_pos: bam_files_iteraction.chrom_to_len[&chrom] - 1
         });
     }
 
@@ -294,12 +375,14 @@ pub fn get_whole_genome_intervals(bam_file: &String) -> Result<Vec<GenomicInterv
 // then just iterating over all of it is the following:
 // if an indexed reader is used, and fetch is never called, pileup() hangs and accessing BAM records
 // doesn't work.
+
+//remove result 
 pub fn get_interval_lst(
-    bam_file: &String,
-    interval: &Option<GenomicInterval>,
+    bam_files_iteraction: &BamFileInteraction,
+    interval: &Option<Vec<GenomicInterval>>,
 ) -> Result<Vec<GenomicInterval>> {
     match interval {
-        &Some(ref iv) => Ok(vec![iv.clone()]),
-        &None => get_whole_genome_intervals(bam_file),
+        &Some(ref iv) => Ok(iv.clone()),
+        &None => get_whole_genome_intervals(bam_files_iteraction),
     }
 }

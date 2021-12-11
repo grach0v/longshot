@@ -40,7 +40,8 @@ use call_genotypes::*;
 use clap::{App, Arg};
 use errors::*;
 use estimate_alignment_parameters::estimate_alignment_parameters;
-use estimate_read_coverage::calculate_mean_coverage;
+use estimate_read_coverage::calculate_numerator_denumerator_coverage;
+// use estimate_read_coverage::calculate_mean_coverage;
 use extract_fragments::ExtractFragmentParameters;
 use fishers_exact::fishers_exact;
 use genotype_probs::{Genotype, GenotypePriors};
@@ -57,6 +58,8 @@ use util::{
     parse_flag, parse_positive_f64, parse_prob_into_logprob, parse_u32, parse_u8, parse_usize,
 };
 use variants_and_fragments::{parse_vcf_potential_variants, VarFilter};
+use::realignment::AlignmentParameters;
+use::realignment::AllAlignParams;
 
 //use haplotype_assembly::separate_reads_by_haplotype;
 //use realignment::{AlignmentParameters, TransitionProbs, EmissionProbs};
@@ -109,14 +112,16 @@ fn run() -> Result<()> {
         //.version(crate_version!())
         //.author("Peter Edge <edge.peterj@gmail.com>")
         //.about("variant caller (SNVs) for long-read sequencing data")
-        .arg(Arg::with_name("Input BAM or CRAM")
-                .short("b")
-                .long("bam")
-                .value_name("BAM")
+
+        .arg(Arg::with_name("Input BAM or CRAM by clusters")
+                .short("bs")
+                .long("bams")
+                .value_name("BAMs")
                 .help("sorted, indexed BAM file with error-prone reads")
-                .display_order(10)
+                .display_order(15)
                 .required(true)
-                .takes_value(true))
+                .takes_value(true)
+                .min_values(1))
         .arg(Arg::with_name("Input FASTA")
                 .short("f")
                 .long("ref")
@@ -140,7 +145,8 @@ fn run() -> Result<()> {
                 .help("Region in format <chrom> or <chrom:start-stop> in which to call variants (1-based, inclusive).")
                 .display_order(40)
                 //.required(true)
-                .takes_value(true))
+                .takes_value(true)
+                .min_values(1))
         .arg(Arg::with_name("Potential Variants VCF")
             .short("v")
             .long("potential_variants")
@@ -349,21 +355,38 @@ fn run() -> Result<()> {
             .display_order(230))
         .get_matches();
 
-    // parse the input arguments and throw errors if inputs are invalid
-    let bamfile_name = input_args
-        .value_of("Input BAM or CRAM")
+    let bamfile_names: Vec<String> = input_args
+        .values_of("Input BAMs or CRAMs")
         .chain_err(|| "Input BAM file not defined.")?
-        .to_string();
+        .map(|x| x.to_string())
+        .collect();
+
     let fasta_file = input_args
         .value_of("Input FASTA")
         .chain_err(|| "Input FASTA file not defined.")?
         .to_string();
+
     let output_vcf_file = input_args
         .value_of("Output VCF")
         .chain_err(|| "Output VCF file not defined.")?
         .to_string();
-    let interval: Option<GenomicInterval> =
-        parse_region_string(input_args.value_of("Region"), &bamfile_name)?;
+
+
+    // ??? fix inside
+    let bam_files_iteraction = BamFileInteraction::new(bamfile_names)?;
+
+    let intervals: Option<Vec<GenomicInterval>> = match input_args
+        .values_of("Region")
+    {
+        Some(regions) => {
+            regions.map(|region| parse_region_string(region, &bam_files_iteraction.chrom_to_len).ok()).collect()
+            // bamfile_names.into_iter().zip(regions.into_iter()).map(|(bam_file, region)| parse_region_string(region, &bam_file).ok()).collect()
+        }
+        None => None,
+    };
+
+
+    // ??? If multiple inputs NO output
     let out_bam: Option<&str> = input_args.value_of("Bam Output");
     let force = parse_flag(&input_args, "Force overwrite")?;
     let no_haps = parse_flag(&input_args, "No haplotypes")?;
@@ -411,6 +434,8 @@ fn run() -> Result<()> {
     let potential_snv_cutoff: LogProb = LogProb::from(PHREDProb(potential_snv_cutoff_phred));
 
     // if VCF file exists, throw error unless --force_overwrite option is set
+
+    // FIXME check if all samples equal
     let vcf = Path::new(&output_vcf_file);
     ensure!(
         !vcf.is_file() || force,
@@ -509,8 +534,37 @@ fn run() -> Result<()> {
                 print_time()
             );
             eprintln!("{} Estimating mean read coverage...", print_time());
-            let mean_coverage: f64 = calculate_mean_coverage(&bamfile_name, &interval)
-                .chain_err(|| "Error calculating mean coverage for BAM file.")?;
+
+            // ??? this is why intervals should be changed
+            let mean_coverage: f64;
+            {   // Calculate avearage
+
+
+                let mut numerator: usize = 0; 
+                let mut denumerator: usize = 0;
+                
+                if let Some(real_intervals) = intervals {
+                    for bamfile_name in bamfile_names {
+                        for interval in real_intervals {
+                            let (num, den) = calculate_numerator_denumerator_coverage(&bamfile_name, &Some(interval))
+                                          .chain_err(|| "Error calculating numerator and denumerator of coverage for BAM file.")?;
+                         numerator += num;
+                         denumerator += den;
+                        }
+                    }
+                } else {
+                    for bamfile_name in bamfile_names {
+                        let (num, den) = calculate_numerator_denumerator_coverage(&bamfile_name, &None) // ??? &None
+                                        .chain_err(|| "Error calculating numerator and denumerator of coverage for BAM file.")?;
+                        numerator += num;
+                        denumerator += den;
+                    }
+                }
+            
+                // ??? check if nan?
+                mean_coverage = numerator as f64 / denumerator as f64;
+            }
+
             let calculated_max_cov =
                 (mean_coverage as f64 + 5.0 * (mean_coverage as f64).sqrt()) as u32;
             eprintln!("{} Mean read coverage: {:.2}", print_time(), mean_coverage);
@@ -560,15 +614,30 @@ fn run() -> Result<()> {
         store_read_id,
     };
 
-    eprintln!("{} Estimating alignment parameters...", print_time());
-    let alignment_parameters = estimate_alignment_parameters(
-        &bamfile_name,
-        &fasta_file,
-        &interval,
-        min_mapq,
-        max_cigar_indel as u32,
-    )
-    .chain_err(|| "Error estimating alignment parameters.")?;
+    let vec_parameters: Vec<AlignmentParameters> = match intervals
+    {
+        Some(good_intervals) => {
+            bamfile_names.iter().zip(good_intervals.iter())
+                .map(|(bam_file, &interval)| estimate_alignment_parameters(
+                    &bam_file, &fasta_file, &Some(interval), 
+                    min_mapq, max_cigar_indel as u32)
+                    .chain_err(|| "Error estimation alignment parameters."))
+                    .collect::<Result<_>>()?
+        }
+
+        None => {
+            bamfile_names.iter()
+            .map(|bam_file| estimate_alignment_parameters(
+                &bam_file, &fasta_file, &None, 
+                min_mapq, max_cigar_indel as u32)
+                .chain_err(|| "Error estimation alignment parameters."))
+                .collect::<Result<_>>()?
+        }
+
+    };
+
+    // ??? constructor
+    let all_alignment_parameters = AllAlignParams::new(&vec_parameters);
 
     /***********************************************************************************************/
     // GET GENOTYPE PRIORS
@@ -588,6 +657,9 @@ fn run() -> Result<()> {
     /***********************************************************************************************/
 
     //let bam_file: String = "test_data/test.bam".to_string();
+
+    // FIXME TMP
+
     let mut varlist = match potential_variants_file {
         Some(file) => {
             eprintln!(
@@ -595,23 +667,24 @@ fn run() -> Result<()> {
                 print_time()
             );
 
-            parse_vcf_potential_variants(&file.to_string(), &bamfile_name)
+            parse_vcf_potential_variants(&file.to_string(), &bam_files_iteraction.chrom_to_tid)
                 .chain_err(|| "Error reading potential variants VCF file.")?
+
         }
         None => {
             eprintln!("{} Calling potential SNVs using pileup...", print_time());
 
             call_potential_snvs::call_potential_snvs(
-                &bamfile_name,
+                &bamfile_names,
                 &fasta_file,
-                &interval,
+                &intervals,
                 &genotype_priors,
                 min_cov,
                 max_cov,
                 potential_snv_min_alt_count,
                 potential_snv_min_alt_frac,
                 min_mapq,
-                alignment_parameters.ln(),
+                &all_alignment_parameters,
                 potential_snv_cutoff,
             )
             .chain_err(|| "Error calling potential SNVs.")?
@@ -632,16 +705,17 @@ fn run() -> Result<()> {
     )
     .chain_err(|| "Error calling potential SNVs.")?;*/
 
-    print_variant_debug(
-        &mut varlist,
-        &interval,
-        &variant_debug_directory,
-        &"1.0.potential_SNVs.vcf",
-        max_cov,
-        &density_params,
-        &sample_name,
-    )?;
-
+    for &interval in intervals.iter().flatten() {
+        print_variant_debug(
+            &mut varlist,
+            &Some(interval),
+            &variant_debug_directory,
+            &"1.0.potential_SNVs.vcf",
+            max_cov,
+            &density_params,
+            &sample_name,
+        )?;
+    }
     eprintln!(
         "{} {} potential variants identified.",
         print_time(),
@@ -651,20 +725,22 @@ fn run() -> Result<()> {
     if varlist.lst.len() == 0 {
         /* no variants identified, but still print empty VCF file with header, 02/12/20 */
         eprintln!("No candidate variants identified, printing empty VCF file...");
-        print_vcf(
-            &mut varlist,
-            &interval,
-            &Some(fasta_file),
-            &output_vcf_file,
-            false,
-            max_cov,
-            &density_params,
-            &sample_name,
-            false,
-            potential_variants_file != None,
-        )
-        .chain_err(|| "Error printing VCF output.")?;
-        return Ok(());
+        for &interval in intervals.iter().flatten() {
+            print_vcf(
+                &mut varlist,
+                &Some(interval),
+                &Some(fasta_file),
+                &output_vcf_file,
+                false,
+                max_cov,
+                &density_params,
+                &sample_name,
+                false,
+                potential_variants_file != None,
+            )
+            .chain_err(|| "Error printing VCF output.")?;
+            return Ok(());
+        }
     }
 
     /***********************************************************************************************/
@@ -756,6 +832,7 @@ fn run() -> Result<()> {
         }
     }
 
+    // ??? what is this warnings
     for f in 0..flist.len() {
         &flist[f].calls.retain(|&c| {
             !varlist.lst[c.var_ix as usize]
