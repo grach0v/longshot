@@ -190,11 +190,12 @@ pub struct BamFileInteraction {
 impl BamFileInteraction {
     pub fn new(names: Vec<String>) -> Result<BamFileInteraction> {
         // Create open_files
+        // ??? 
         let bam_files: Vec<rust_htslib::bam::Reader> = names
             .iter()
             .map(|name| bam::Reader::from_path(name)
-                .chain_err(|| ErrorKind::BamOpenError))
-            .collect::<_>().ok();
+                .chain_err(|| ErrorKind::BamOpenError).unwrap())
+            .collect();
 
         // Create chrom_to_tid
         // And chrom_to_len

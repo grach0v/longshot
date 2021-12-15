@@ -9,8 +9,9 @@ use bio::stats::{LogProb, Prob};
 use rust_htslib::bam;
 use rust_htslib::bam::pileup::Indel;
 use rust_htslib::bam::Read;
-use rust_htslib::bam::IndexedReader;
-use rust_htslib::bam::pileup::Pileups;
+use rust_htslib::bam::IndexedReader as IndexedReader;
+use rust_htslib::bam::pileup::Pileups as Pileups;
+use rust_htslib::bam::pileup::Pileup as Pileup;
 
 use errors::*;
 //use std::str;
@@ -73,27 +74,48 @@ static VERBOSE: bool = false; //true;
 /// - Error calculating genotype posteriors for reference genotype qual calculation (usually having to
 ///          do with accessing invalid genotypes)
 
+
 struct MultiplePileup {
     bam_files: Vec<IndexedReader>,
-    bam_pileups: Vec<Pileups<IndexedReader>>
+    bam_pileups: Vec<Pileups<IndexedReader>>,
 }
 
 impl MultiplePileup {
-    pub fn new(bam_names: &Vec<String>, interval: GenomicInterval) -> Result<MultiplePileup> {
-        let mut bam_files: Vec<IndexedReader> = 
-                            bam_names
-                            .iter()
-                            .map(|name| IndexedReader::from_path(name)
-                                        .chain_err(|| ErrorKind::IndexedBamOpenError)?)
-                            .collect();
+    pub fn new(bam_files_interact: &BamFileInteraction, interval: GenomicInterval) -> Result<MultiplePileup> {
         
-        let mut bam_pileups: Vec<Pileups<IndexedReader>> = 
-                            bam_files
-                            .iter()
-                            .map(|bam_ix| bam_ix
-                                            .fetch(interval.));
+        let mut bam_ix_files: Vec<IndexedReader>;
+        let mut bam_pileups: Vec<Pileups<IndexedReader>>;
+
+        for (bam, bam_ind) in bam_files_interact.file_names.iter().zip(1..bam_files_interact.open_files.len()) {
+            let tid = bam_files_interact.chrom_to_tid[&interval.chrom][bam_ind];
+            if tid == -1 {
+                continue;
+            }
+            bam_ix_files.push(bam::IndexedReader::from_path(bam).chain_err(|| ErrorKind::IndexedBamOpenError)?);
+
+            bam_ix_files[bam_ix_files.len() - 1].fetch(tid as u32, interval.start_pos as u32, interval.end_pos + 1 as u32);
+        
+            bam_pileups.push(bam_ix_files[bam_ix_files.len() - 1].pileup());
+        }
+
+        Ok (
+            MultiplePileup {
+                bam_files: bam_ix_files,
+                bam_pileups: bam_pileups,
+            }
+        )
+
     }
 }
+
+impl Iterator for MultiplePileup {
+    fn next(&mut self) -> Option<Vec<Pileups<IndexedReader>>> {
+        let min_index = self.bam_pileups.iter().map(|x| x.pos).min();
+
+        ()
+    }
+}
+
 
 pub fn call_potential_snvs(
     bam_files_iteraction: &BamFileInteraction,
@@ -176,6 +198,7 @@ pub fn call_potential_snvs(
         bam_ix
             .fetch(iv.tid as u32, iv.start_pos as u32, iv.end_pos as u32 + 1)
             .chain_err(|| ErrorKind::IndexedBamFetchError)?;
+        
         let bam_pileup = bam_ix.pileup();
 
         // this variable is used to avoid having a variant inside a previous variant's deletion.

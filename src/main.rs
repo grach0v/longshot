@@ -667,7 +667,7 @@ fn run() -> Result<()> {
                 print_time()
             );
 
-            parse_vcf_potential_variants(&file.to_string(), &bam_files_iteraction.chrom_to_tid)
+            parse_vcf_potential_variants(&file.to_string(), &bam_files_iteraction)
                 .chain_err(|| "Error reading potential variants VCF file.")?
 
         }
