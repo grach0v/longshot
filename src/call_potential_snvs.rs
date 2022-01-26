@@ -7,11 +7,8 @@ use std::char;
 use bio::io::fasta;
 use bio::stats::{LogProb, Prob};
 use rust_htslib::bam;
-use rust_htslib::bam::pileup::Indel;
-use rust_htslib::bam::Read;
-use rust_htslib::bam::IndexedReader as IndexedReader;
-use rust_htslib::bam::pileup::Pileups as Pileups;
-use rust_htslib::bam::pileup::Pileup as Pileup;
+use rust_htslib::bam::pileup::{Indel, Pileup, Pileups};
+use rust_htslib::bam::{Read, IndexedReader};
 
 use errors::*;
 //use std::str;
@@ -29,6 +26,8 @@ use variants_and_fragments::*;
 
 pub static VARLIST_CAPACITY: usize = 0; //1000000;
 static VERBOSE: bool = false; //true;
+
+use itertools::izip;
 
 /// Calls potential SNV sites using a pileup-based genotyping calculation
 ///
@@ -75,44 +74,80 @@ static VERBOSE: bool = false; //true;
 ///          do with accessing invalid genotypes)
 
 
-struct MultiplePileup {
-    bam_files: Vec<IndexedReader>,
-    bam_pileups: Vec<Pileups<IndexedReader>>,
+
+struct MultiplePileup <'a> {
+    bam_pileups: Vec<Pileups<'a, IndexedReader>>,
+    bam_pileup: Vec<Option<Pileup>>
 }
 
-impl MultiplePileup {
+impl MultiplePileup <'_> {
     pub fn new(bam_files_interact: &BamFileInteraction, interval: GenomicInterval) -> Result<MultiplePileup> {
         
         let mut bam_ix_files: Vec<IndexedReader>;
         let mut bam_pileups: Vec<Pileups<IndexedReader>>;
 
-        for (bam, bam_ind) in bam_files_interact.file_names.iter().zip(1..bam_files_interact.open_files.len()) {
+        for (bam, bam_ind) in bam_files_interact.file_names.iter().zip(0..bam_files_interact.open_files.len()) {
             let tid = bam_files_interact.chrom_to_tid[&interval.chrom][bam_ind];
             if tid == -1 {
                 continue;
             }
             bam_ix_files.push(bam::IndexedReader::from_path(bam).chain_err(|| ErrorKind::IndexedBamOpenError)?);
 
-            bam_ix_files[bam_ix_files.len() - 1].fetch(tid as u32, interval.start_pos as u32, interval.end_pos + 1 as u32);
+            bam_ix_files[bam_ix_files.len() - 1].fetch((tid as u32, interval.start_pos as u32, interval.end_pos + 1 as u32));
         
             bam_pileups.push(bam_ix_files[bam_ix_files.len() - 1].pileup());
         }
 
+        let bam_pileup: Vec<Option<Pileup>> = bam_pileups.iter().map(|x| x.next()).collect();
+
         Ok (
             MultiplePileup {
-                bam_files: bam_ix_files,
                 bam_pileups: bam_pileups,
+                bam_pileup: bam_pileup
             }
         )
 
     }
 }
 
-impl Iterator for MultiplePileup {
-    fn next(&mut self) -> Option<Vec<Pileups<IndexedReader>>> {
-        let min_index = self.bam_pileups.iter().map(|x| x.pos).min();
+impl Iterator for MultiplePileup <'_> { 
 
-        ()
+    type Item = Vec<Pileup>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        // let min_pos = self.bam_pileup.iter().map(|x| x.pos()).min().unwrap();
+        let min_pos = self.bam_pileup.iter().filter(|x| !x.is_none()).map(|x| x.unwrap().pos()).min().unwrap();
+
+        let mut res: Vec<Pileup>;
+
+        // for (pileup, iter, i) in izip!(self.bam_pileups.iter(), self.bam_pileup.iter(), 0..self.bam_pileup.len()) {
+
+        let mut is_end = true;
+
+        for i in 0..self.bam_pileup.len() {
+            
+            match self.bam_pileup[i] {
+                Some(p) => {
+                    is_end = false;
+                    res.push(p);
+                    self.bam_pileup[i] = match self.bam_pileups[i].next() {
+                        Some(iter) => Some(iter.unwrap()),
+                        None => None,
+                    };
+                }
+            }
+
+            // if self.bam_pileup[i].pos() == min_pos {
+            //     res.push(self.bam_pileup[i]);
+            //     self.bam_pileup[i] = self.bam_pileups[i].next().unwrap().unwrap(); /// fix Some
+            // }
+        }
+        
+        if is_end {
+            return None;
+        }
+
+        Some(res)
     }
 }
 
@@ -189,23 +224,25 @@ pub fn call_potential_snvs(
 
     let interval_lst: Vec<GenomicInterval> = get_interval_lst(bam_files_iteraction, intervals)?;
     
-    let mut bam_ix =
-        bam::IndexedReader::from_path(bam_file).chain_err(|| ErrorKind::IndexedBamOpenError)?;
+    // let mut bam_ix =
+    //     bam::IndexedReader::from_path(bam_file).chain_err(|| ErrorKind::IndexedBamOpenError)?;
 
     // interval_lst has either a single genomic interval (if --region was specified) or a list of
     // genomic intervals for each chromosome covering the entire genome
     for iv in interval_lst {
-        bam_ix
-            .fetch(iv.tid as u32, iv.start_pos as u32, iv.end_pos as u32 + 1)
-            .chain_err(|| ErrorKind::IndexedBamFetchError)?;
+        // bam_ix
+        //     .fetch((iv.tid as u32, iv.start_pos as u32, iv.end_pos as u32 + 1))
+        //     .chain_err(|| ErrorKind::IndexedBamFetchError)?;
         
-        let bam_pileup = bam_ix.pileup();
+        // let bam_pileup = bam_ix.pileup();
+
+        let mul_pileup = MultiplePileup::new(&bam_files_iteraction, iv)
 
         // this variable is used to avoid having a variant inside a previous variant's deletion.
         let mut next_valid_pos = 0;
 
         // iterate over base pileup
-        for p in bam_pileup {
+        for p in mul_pileup {
             let pileup = p.chain_err(|| ErrorKind::IndexedBamPileupReadError)?;
 
             let tid: usize = pileup.tid() as usize;

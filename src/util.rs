@@ -194,8 +194,8 @@ impl BamFileInteraction {
         let bam_files: Vec<rust_htslib::bam::Reader> = names
             .iter()
             .map(|name| bam::Reader::from_path(name)
-                .chain_err(|| ErrorKind::BamOpenError).unwrap())
-            .collect();
+                .chain_err(|| ErrorKind::BamOpenError))
+            .collect::<Result<_>>()?;
 
         // Create chrom_to_tid
         // And chrom_to_len
@@ -220,7 +220,7 @@ impl BamFileInteraction {
                 let tlen = bam
                     .header()
                     .target_len(chrom_index as u32)
-                    .chain_err(|| ErrorKind::BamHeaderTargetLenAccessError)?;
+                    .chain_err(|| ErrorKind::BamHeaderTargetLenAccessError)? as u32;
 
                 if let (Some(vec), Some(&len)) = (chrom_to_tid.get(&chrom), chrom_to_len.get(&chrom)) {
                     vec[vec.len() - 1] = chrom_index as i32;
