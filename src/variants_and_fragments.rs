@@ -172,7 +172,7 @@ pub struct VarList {
 pub fn parse_vcf_potential_variants(
     vcffile_name: &String,
     // chrom_to_tid: &HashMap<String, Vec<i32>>
-    bam_files_iteraction: &BamFileInteraction
+    bam_files_iteraction: &OpenedBamFiles
 ) -> Result<VarList> {
     // must assert that the VCF file is sorted correctly
     // can we just read it in and then check that it's sorted using the check_sorted function vs the bam's tlist?

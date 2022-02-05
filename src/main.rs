@@ -17,6 +17,7 @@ extern crate rust_htslib;
 extern crate error_chain;
 extern crate fishers_exact;
 extern crate hashbrown;
+extern crate itertools;
 
 // import modules
 mod call_genotypes;
@@ -373,7 +374,7 @@ fn run() -> Result<()> {
 
 
     // ??? fix inside
-    let bam_files_iteraction = BamFileInteraction::new(bamfile_names)?;
+    let bam_files_iteraction = OpenedBamFiles::new(bamfile_names)?;
 
     let intervals: Option<Vec<GenomicInterval>> = match input_args
         .values_of("Region")

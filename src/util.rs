@@ -178,7 +178,7 @@ pub struct DensityParameters {
     pub gq: f64,
 }
 
-pub struct BamFileInteraction {
+pub struct OpenedBamFiles {
     pub file_names: Vec<String>,
     pub open_files: Vec<rust_htslib::bam::Reader>,
     pub chrom_to_tid: HashMap<String, Vec<i32>>,
@@ -187,8 +187,8 @@ pub struct BamFileInteraction {
     pub target_names: Vec<String>
 }
 
-impl BamFileInteraction {
-    pub fn new(names: Vec<String>) -> Result<BamFileInteraction> {
+impl OpenedBamFiles {
+    pub fn new(names: Vec<String>) -> Result<OpenedBamFiles> {
         // Create open_files
         // ??? 
         let bam_files: Vec<rust_htslib::bam::Reader> = names
@@ -241,7 +241,7 @@ impl BamFileInteraction {
         }
 
         Ok(
-            BamFileInteraction {
+            OpenedBamFiles {
                 file_names: names,
                 open_files: bam_files,
                 chrom_to_tid: chrom_to_tid,
@@ -329,7 +329,7 @@ pub fn parse_target_names_opened(bam: &rust_htslib::bam::Reader) -> Result<Vec<S
 }
 
 
-pub fn get_whole_genome_intervals(bam_files_iteraction: &BamFileInteraction) -> Result<Vec<GenomicInterval>> {
+pub fn get_whole_genome_intervals(bam_files_iteraction: &OpenedBamFiles) -> Result<Vec<GenomicInterval>> {
 
     let mut intervals: Vec<GenomicInterval> = vec![];
 
@@ -379,7 +379,7 @@ pub fn get_whole_genome_intervals(bam_files_iteraction: &BamFileInteraction) -> 
 
 //remove result 
 pub fn get_interval_lst(
-    bam_files_iteraction: &BamFileInteraction,
+    bam_files_iteraction: &OpenedBamFiles,
     interval: &Option<Vec<GenomicInterval>>,
 ) -> Result<Vec<GenomicInterval>> {
     match interval {
