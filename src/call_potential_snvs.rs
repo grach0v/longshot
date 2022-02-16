@@ -123,6 +123,7 @@ impl MultiplePileup <'_> {
 }
 
 impl Iterator for MultiplePileup <'_> { 
+    // returs Vec of Option<Pileup> size of number of bamfiles, 
 
     type Item = Vec<Option<Pileup>>;
 
@@ -134,9 +135,10 @@ impl Iterator for MultiplePileup <'_> {
         }
 
         let min_pos = min_pos.unwrap();
-        
 
         let mut res: Vec<Option<Pileup>> = Vec::with_capacity(self.bam_pileup.len());
+
+        let mut is_end = true;
 
         for i in 0..self.bam_pileup.len() {
 
@@ -149,19 +151,19 @@ impl Iterator for MultiplePileup <'_> {
                     Some(p) => Some(p.unwrap_or_else(|e| panic!("{}", e))),
                     None => None,
                 }; 
+
+                is_end = false;
+
             } else {
                 res.push(None);
             }
         }
         
-        if res.is_empty() {
+        if is_end {
             None
         } else {
-            Some(res.iter().enumerate())
+            Some(res)
         }
-
-
-
     }
 }
 
@@ -189,21 +191,27 @@ impl<'a> Iterator for MyAlignments<'a> {
         loop {
             if let Some(align) = self.alignments.next() {
                 return Some((self.curr_ix, align));
-            } else {
-                self.curr_ix += 1;
-                // ToDo Finish else
+            } 
+
+            self.curr_ix += 1;
+
+            if self.curr_ix >= self.pileups.len() {
+                return None;
             }
-        }
+
+            if let Some(p) = self.pileups[self.curr_ix] {
+                self.alignments = p.alignments();
+            }
+        }            
+
     }
 } 
-
 
 
 pub fn call_potential_snvs(
     bam_files_iteraction: &OpenedBamFiles,
     fasta_file: &String,
     intervals: &Option<Vec<GenomicInterval>>,
-    // interval: &Option<GenomicInterval>,
     genotype_priors: &GenotypePriors,
     min_coverage: u32,
     max_coverage: u32,
@@ -223,7 +231,7 @@ pub fn call_potential_snvs(
 
     // pileup over all covered sites
     let mut ref_seq: Vec<char> = vec![]; // this vector will be used to hold the reference sequence
-    let mut prev_tid = 4294967295;
+    let mut prev_tid = 4294967295; // ???
 
     let mut genotype_priors_table: [[(LogProb, LogProb, LogProb); 4]; 4] =
         [[(LogProb::ln_zero(), LogProb::ln_zero(), LogProb::ln_zero()); 4]; 4];
@@ -289,14 +297,22 @@ pub fn call_potential_snvs(
         let mut next_valid_pos = 0;
 
         // iterate over base pileup
-        for p in mul_pileup {
-            let pileup = p.chain_err(|| ErrorKind::IndexedBamPileupReadError)?;
+        for pileup in mul_pileup {
+            // let pileup = p.chain_err(|| ErrorKind::IndexedBamPileupReadError)?;
 
-            let tid: usize = pileup.tid() as usize;
-            let chrom: String = target_names[tid].clone();
+            // let tid: usize = pileup.tid() as usize;
+            // let chrom: String = target_names[tid].clone();
+
+            // at least one pileup is not none
+            let (index, p): (usize, &Option<Pileup>) = pileup.iter().enumerate().find(|(i, p)| p.is_some()).unwrap();
+            let p = p.unwrap();
+
+            let tid = p.tid() as usize;
+            let chrom: String = bam_files_iteraction.file_index_tid_to_chrom[index][tid];
 
             // if we're on a different contig/chrom, we need to read in the sequence for that
             // contig/chrom from the FASTA into the ref_seq vector
+
             if tid != prev_tid {
                 let mut ref_seq_u8: Vec<u8> = vec![];
                 fasta
@@ -312,7 +328,7 @@ pub fn call_potential_snvs(
             prev_tid = tid;
 
             // this is specifically to avoid having a variant inside a previous variant's deletion.
-            if pileup.pos() < next_valid_pos {
+            if pileup[index].unwrap().pos() < next_valid_pos {
                 continue;
             }
 
@@ -321,11 +337,13 @@ pub fn call_potential_snvs(
             // r_window = 15
             // l..r = 6,7,8,9,10,11,12,13,14
 
-            let mut counts = [0 as usize; 5]; // A,C,G,T,N
+            let mut counts = vec![[0 as usize; 5]; pileup.len()]; // A,C,G,T,N
 
             // use a counter instead of pileup.depth() since that would include qc_fail bases, low mapq, etc.
-            let mut depth: usize = 0;
-            let pos: usize = pileup.pos() as usize;
+            // let mut depth: usize = 0;
+
+            let depth: Vec<usize> = vec![0; pileup.len()];
+            let pos: usize = pileup[index].unwrap().pos() as usize;
             let ref_allele = (ref_seq[pos] as char).to_ascii_uppercase();
 
             if ref_allele == 'N' {
@@ -345,7 +363,9 @@ pub fn call_potential_snvs(
             let mut mq50: f64 = 0.0; // total number of reads in this pileup with mapq >= 50
 
             // pileup the bases for a single position and count number of each base
-            for alignment in pileup.alignments() {
+            let alignments = MyAlignments::new(&pileup);
+
+            for (align_index, alignment) in alignments {
                 let record = alignment.record();
 
                 // check that the read doesn't fail any standard filters
@@ -381,7 +401,7 @@ pub fn call_potential_snvs(
                     continue;
                 }
 
-                depth += 1; // depth counter does not consider unmapped low-mapq reads
+                depth[align_index] += 1; // depth counter does not consider unmapped low-mapq reads
 
                 // handle the base/indel observed on the read
                 if !alignment.is_del() && !alignment.is_refskip() {
@@ -402,7 +422,7 @@ pub fn call_potential_snvs(
                                 _ => 4
                             };
 
-                            counts[b] += 1;
+                            counts[align_index][b] += 1;
                         }
                         _ => {}
                     }
@@ -416,35 +436,51 @@ pub fn call_potential_snvs(
             let mq40_frac = mq40 / (passing_reads as f64);
             let mq50_frac = mq50 / (passing_reads as f64);
 
+            // ???
             if depth < min_coverage as usize {
                 continue;
             }
 
+            // ???
             if depth > max_coverage as usize {
                 continue;
             }
 
-            let mut var_count = 0;
-            let mut ref_count = 0;
+            // let mut var_count = 0;
+            // let mut ref_count = 0;
+
+            let var_count: Vec<usize> = vec![0; pileup.len()];
+            let ref_count: Vec<usize> = vec![0; pileup.len()];
+
             let mut var_allele = 'N';
             let mut ref_allele_ix = 0;
             let mut var_allele_ix = 0;
 
-            for i in 0..5 {
-                //base_cov += counts[i];
-                if bases[i] == ref_allele {
-                    ref_count = counts[i];
-                    ref_allele_ix = i;
-                }
-                if counts[i] > var_count && bases[i] != ref_allele {
-                    var_count = counts[i];
-                    var_allele = bases[i];
-                    var_allele_ix = i;
+            for alignm_i in 0..pileup.len() {
+                for i in 0..5 {
+                    //base_cov += counts[i];
+                    if bases[i] == ref_allele {
+                        ref_count[alignm_i] = counts[alignm_i][i];
+                        ref_allele_ix = i;
+                    }
+                    if counts[alignm_i][i] > var_count[alignm_i] && bases[i] != ref_allele {
+                        var_count[alignm_i] = counts[alignm_i][i];
+                        var_allele = bases[i];
+                        var_allele_ix = i;
+                    }
                 }
             }
 
-            let alt_frac: f64 = (var_count as f64) / (depth as f64);
+            // let alt_frac: f64 = (var_count as f64) / (depth as f64);
+            let alt_frac: Vec<Option<f64>> = var_count.into_iter().zip(depth)
+                .map(|(v, d)| 
+                    if d != 0 {
+                        Some((v as f64) / (d as f64))
+                    } else {
+                        None
+                    }).collect();
 
+            // ???
             if var_count < min_alt_count || alt_frac < min_alt_frac {
                 continue;
             }
@@ -463,9 +499,16 @@ pub fn call_potential_snvs(
             // we want to be able to multiply them by some integer (raise to power),
             // representing multiplying the independent probability that many times
 
-            // ??? Get probs by position?
-            let p_miscall = *ln_align_params.emission_probs.not_equal;
-            let p_call = *LogProb::ln_one_minus_exp(&ln_align_params.emission_probs.not_equal);
+            // let p_miscall = *ln_align_params.emission_probs.not_equal;
+            // let p_call = *LogProb::ln_one_minus_exp(&ln_align_params.emission_probs.not_equal);
+
+            let p_miscall = (0..pileup.len())
+                .map(|i| all_alignment_parameters.get_ln_params(i).emission_probs.not_equal)
+                .collect();
+            let p_call = p_miscall.into_iter()
+                .map(|p| *LogProb::ln_one_minus_exp(p))
+                .collect();
+
             let ln_half = *LogProb::from(Prob(0.5)); // ln(0.5)
             let ln_two = *LogProb::from(Prob(2.0)); // ln(2)
             let p_het =
@@ -474,12 +517,25 @@ pub fn call_potential_snvs(
             // raise the probability of observing allele to the power of number of times we observed that allele
             // fastest way of multiplying probabilities for independent events, where the
             // probabilities are all the same (either quality score or 1 - quality score)
-            let p00 = LogProb(*prior_00 + p_call * ref_count as f64 + p_miscall * var_count as f64);
-            let p01 = LogProb(ln_two + *prior_01 + p_het * (ref_count + var_count) as f64);
-            let p11 = LogProb(*prior_11 + p_call * var_count as f64 + p_miscall * ref_count as f64);
+
+            // let p00 = LogProb(*prior_00 + p_call * ref_count as f64 + p_miscall * var_count as f64);
+            // let p01 = LogProb(ln_two + *prior_01 + p_het * (ref_count + var_count) as f64);
+            // let p11 = LogProb(*prior_11 + p_call * var_count as f64 + p_miscall * ref_count as f64);
+
+            let p00 = (0..pileup.len())
+                .map(|i| *prior_00 + p_call[i] * ref_count[i] as f64 + p_miscall[i] * var_count[i] as f64)
+                .sum();
+
+            let p01 = (0..pileup.len())
+                .map(|i| ln_two + *prior_01 + p_het * (ref_count[i] + var_count[0]) as f64)
+                .sum();
+            
+            let p11 = (0..pileup.len())
+                .map(|i| *prior_11 + p_call * var_count as f64 + p_miscall * ref_count as f64)
+                .sum();
 
             // calculate the posterior probability of 0/0 genotype
-            let p_total = LogProb::ln_sum_exp(&[p00, p01, p11]);
+            // let p_total = LogProb::ln_sum_exp(&[p00, p01, p11]);
             //let post_00 = p00 - p_total;
             let snv_qual = LogProb::ln_add_exp(p01, p11) - p_total; //LogProb::ln_one_minus_exp(&post_00);
 
@@ -488,7 +544,7 @@ pub fn call_potential_snvs(
             // check if SNV meets our quality criteria for a potential SNV
             // if it does, make a new variant and add it to the list of potential SNVs.
             if snv_qual > potential_snv_cutoff && ref_allele != 'N' && var_allele != 'N' {
-                let tid: usize = pileup.tid() as usize;
+                let tid: usize = pileup[index].unwrap().tid() as usize;
                 let new_var = Var {
                     ix: 0,
                     // these will be set automatically,
@@ -523,7 +579,7 @@ pub fn call_potential_snvs(
                 };
 
                 // we don't want potential SNVs that are inside a deletion, for instance.
-                next_valid_pos = pileup.pos() + 1;
+                next_valid_pos = pileup[index].unwrap().pos() + 1;
 
                 varlist.push(new_var);
             }
