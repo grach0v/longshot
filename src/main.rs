@@ -373,7 +373,6 @@ fn run() -> Result<()> {
         .to_string();
 
 
-    // ??? fix inside
     let bam_files_iteraction = OpenedBamFiles::new(bamfile_names)?;
 
     let intervals: Option<Vec<GenomicInterval>> = match input_args
@@ -676,7 +675,7 @@ fn run() -> Result<()> {
             eprintln!("{} Calling potential SNVs using pileup...", print_time());
 
             call_potential_snvs::call_potential_snvs(
-                &bamfile_names,
+                &bam_files_iteraction,
                 &fasta_file,
                 &intervals,
                 &genotype_priors,

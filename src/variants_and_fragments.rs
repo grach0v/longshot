@@ -603,59 +603,59 @@ impl VarList {
         new_v
     }
 
-    pub fn combine(&mut self, other: &mut VarList) -> Result<()> {
-        if self.target_names != other.target_names {
-            bail!("Target names of variant lists that are being combined are not the same.");
-        }
+    // pub fn combine(&mut self, other: &mut VarList) -> Result<()> {
+    //     if self.target_names != other.target_names {
+    //         bail!("Target names of variant lists that are being combined are not the same.");
+    //     }
 
-        other.lst.append(&mut self.lst);
-        other.lst.sort();
+    //     other.lst.append(&mut self.lst);
+    //     other.lst.sort();
 
-        let mut new_vlst: Vec<Var> = vec![];
-        // any variants that start at or after area_start, but before area_end, are added to the group
-        let mut var_group: Vec<Var> = vec![];
-        let mut area_tid = other.lst[0].tid;
-        let mut area_start = other.lst[0].pos0;
-        let mut area_end = other.lst[0].pos0 + other.lst[0].alleles[0].len();
+    //     let mut new_vlst: Vec<Var> = vec![];
+    //     // any variants that start at or after area_start, but before area_end, are added to the group
+    //     let mut var_group: Vec<Var> = vec![];
+    //     let mut area_tid = other.lst[0].tid;
+    //     let mut area_start = other.lst[0].pos0;
+    //     let mut area_end = other.lst[0].pos0 + other.lst[0].alleles[0].len();
 
-        for var in &other.lst {
-            if var.tid == area_tid && var.pos0 >= area_start && var.pos0 < area_end {
-                var_group.push(var.clone());
-                // the new var might overlap, but also extend the variant area
-                if var.pos0 + var.alleles[0].len() > area_end {
-                    area_end = var.pos0 + var.alleles[0].len();
-                }
-            } else {
-                let new_v = VarList::combine_variant_group(&mut var_group);
+    //     for var in &other.lst {
+    //         if var.tid == area_tid && var.pos0 >= area_start && var.pos0 < area_end {
+    //             var_group.push(var.clone());
+    //             // the new var might overlap, but also extend the variant area
+    //             if var.pos0 + var.alleles[0].len() > area_end {
+    //                 area_end = var.pos0 + var.alleles[0].len();
+    //             }
+    //         } else {
+    //             let new_v = VarList::combine_variant_group(&mut var_group);
 
-                new_vlst.push(new_v);
-                // clear out the variant group and add the current variant
-                var_group.clear();
-                var_group.push(var.clone());
-                // set the new "variant area" within which new variants will be said to overlap with this one
-                area_tid = var.tid;
-                area_start = var.pos0;
-                area_end = var.pos0 + var.alleles[0].len();
-            }
-        }
+    //             new_vlst.push(new_v);
+    //             // clear out the variant group and add the current variant
+    //             var_group.clear();
+    //             var_group.push(var.clone());
+    //             // set the new "variant area" within which new variants will be said to overlap with this one
+    //             area_tid = var.tid;
+    //             area_start = var.pos0;
+    //             area_end = var.pos0 + var.alleles[0].len();
+    //         }
+    //     }
 
-        // the var_group might have one last variant left in it
-        if var_group.len() > 0 {
-            let new_v = VarList::combine_variant_group(&mut var_group);
-            new_vlst.push(new_v);
-        }
+    //     // the var_group might have one last variant left in it
+    //     if var_group.len() > 0 {
+    //         let new_v = VarList::combine_variant_group(&mut var_group);
+    //         new_vlst.push(new_v);
+    //     }
 
-        // set the list to the new merged list and re-index it
-        self.lst = new_vlst;
+    //     // set the list to the new merged list and re-index it
+    //     self.lst = new_vlst;
 
-        self.sort()?;
-        self.assert_sorted();
+    //     self.sort()?;
+    //     self.assert_sorted();
 
-        // clear out the other VarList since we've mutated it beyond saving
-        other.lst.clear();
-        other.ix.clear();
-        Ok(())
-    }
+    //     // clear out the other VarList since we've mutated it beyond saving
+    //     other.lst.clear();
+    //     other.ix.clear();
+    //     Ok(())
+    // }
 }
 
 pub fn var_filter(

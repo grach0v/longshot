@@ -181,6 +181,7 @@ pub struct DensityParameters {
 pub struct OpenedBamFiles {
     pub file_names: Vec<String>,
     pub open_files: Vec<rust_htslib::bam::Reader>,
+    pub open_indexed_files: Vec<rust_htslib::bam::IndexedReader>,
     pub chrom_to_tid: HashMap<String, Vec<i32>>,
     pub chrom_to_len: HashMap<String, u32>,
     pub file_index_tid_to_chrom: Vec<Vec<String>>,
@@ -194,6 +195,12 @@ impl OpenedBamFiles {
         let bam_files: Vec<rust_htslib::bam::Reader> = names
             .iter()
             .map(|name| bam::Reader::from_path(name)
+                .chain_err(|| ErrorKind::BamOpenError))
+            .collect::<Result<_>>()?;
+
+        let bam_indexes_files: Vec<rust_htslib::bam::IndexedReader> = names
+            .iter()
+            .map(|name| bam::IndexedReader::from_path(name)
                 .chain_err(|| ErrorKind::BamOpenError))
             .collect::<Result<_>>()?;
 
@@ -244,6 +251,7 @@ impl OpenedBamFiles {
             OpenedBamFiles {
                 file_names: names,
                 open_files: bam_files,
+                open_indexed_files: bam_indexes_files,
                 chrom_to_tid: chrom_to_tid,
                 chrom_to_len: chrom_to_len,
                 file_index_tid_to_chrom: file_index_tid_to_chrom,

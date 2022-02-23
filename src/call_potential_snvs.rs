@@ -72,9 +72,6 @@ use itertools::izip;
 ///          do with accessing invalid genotypes)
 
 
-// Порядок файлов такой же как в OpenedBamFiles
-// Структуру которая склиевает alingnments и восвращает номера файлов
-
 struct MultiplePileup <'a> {
     bam_pileup_iter: Vec<Option<Pileups<'a, IndexedReader>>>,
     bam_pileup: Vec<Option<Pileup>>,
@@ -231,7 +228,7 @@ pub fn call_potential_snvs(
 
     // pileup over all covered sites
     let mut ref_seq: Vec<char> = vec![]; // this vector will be used to hold the reference sequence
-    let mut prev_tid = 4294967295; // ???
+    let mut prev_tid = u32::MAX as usize; //4294967295; // ???
 
     let mut genotype_priors_table: [[(LogProb, LogProb, LogProb); 4]; 4] =
         [[(LogProb::ln_zero(), LogProb::ln_zero(), LogProb::ln_zero()); 4]; 4];
@@ -270,26 +267,13 @@ pub fn call_potential_snvs(
     // then just iterating over all of ```bam_ix.pileup()```) is the following:
     // if an indexed reader is used, and fetch is never called, pileup() hangs.
 
-    // let mut interval_lst: Vec<GenomicInterval>;
-    // for (bam_file, interval) in bamfile_names.iter().zip(intervals.iter()) {
-    //     for value in get_interval_lst(bam_file, interval)? {
-    //         interval_lst.push(value);
-    //     }
-    // }
 
     let interval_lst: Vec<GenomicInterval> = get_interval_lst(bam_files_iteraction, intervals)?;
     
-    // let mut bam_ix =
-    //     bam::IndexedReader::from_path(bam_file).chain_err(|| ErrorKind::IndexedBamOpenError)?;
 
     // interval_lst has either a single genomic interval (if --region was specified) or a list of
     // genomic intervals for each chromosome covering the entire genome
     for iv in interval_lst {
-        // bam_ix
-        //     .fetch((iv.tid as u32, iv.start_pos as u32, iv.end_pos as u32 + 1))
-        //     .chain_err(|| ErrorKind::IndexedBamFetchError)?;
-        
-        // let bam_pileup = bam_ix.pileup();
 
         let mul_pileup = MultiplePileup::new(&bam_files_iteraction, iv);
 
@@ -304,11 +288,11 @@ pub fn call_potential_snvs(
             // let chrom: String = target_names[tid].clone();
 
             // at least one pileup is not none
-            let (index, p): (usize, &Option<Pileup>) = pileup.iter().enumerate().find(|(i, p)| p.is_some()).unwrap();
+            let (first_present, p): (usize, &Option<Pileup>) = pileup.iter().enumerate().find(|(i, p)| p.is_some()).unwrap();
             let p = p.unwrap();
 
             let tid = p.tid() as usize;
-            let chrom: String = bam_files_iteraction.file_index_tid_to_chrom[index][tid];
+            let chrom: String = bam_files_iteraction.file_index_tid_to_chrom[first_present][tid];
 
             // if we're on a different contig/chrom, we need to read in the sequence for that
             // contig/chrom from the FASTA into the ref_seq vector
@@ -328,7 +312,7 @@ pub fn call_potential_snvs(
             prev_tid = tid;
 
             // this is specifically to avoid having a variant inside a previous variant's deletion.
-            if pileup[index].unwrap().pos() < next_valid_pos {
+            if pileup[first_present].unwrap().pos() < next_valid_pos {
                 continue;
             }
 
@@ -343,7 +327,7 @@ pub fn call_potential_snvs(
             // let mut depth: usize = 0;
 
             let depth: Vec<usize> = vec![0; pileup.len()];
-            let pos: usize = pileup[index].unwrap().pos() as usize;
+            let pos: usize = pileup[first_present].unwrap().pos() as usize;
             let ref_allele = (ref_seq[pos] as char).to_ascii_uppercase();
 
             if ref_allele == 'N' {
@@ -436,13 +420,13 @@ pub fn call_potential_snvs(
             let mq40_frac = mq40 / (passing_reads as f64);
             let mq50_frac = mq50 / (passing_reads as f64);
 
-            // ???
-            if depth < min_coverage as usize {
+            let depth_sum = depth.iter().sum();
+
+            if depth_sum < min_coverage as usize {
                 continue;
             }
 
-            // ???
-            if depth > max_coverage as usize {
+            if depth_sum > max_coverage as usize {
                 continue;
             }
 
@@ -472,16 +456,20 @@ pub fn call_potential_snvs(
             }
 
             // let alt_frac: f64 = (var_count as f64) / (depth as f64);
-            let alt_frac: Vec<Option<f64>> = var_count.into_iter().zip(depth)
-                .map(|(v, d)| 
-                    if d != 0 {
-                        Some((v as f64) / (d as f64))
-                    } else {
-                        None
-                    }).collect();
+            // let alt_frac: Vec<f64> = var_count.into_iter().zip(depth)
+            //     .map(|(v, d)| 
+            //         if d != 0 {
+            //             (v as f64) / (d as f64)
+            //         } else {
+            //             f64::NAN
+            //         }).collect();
 
-            // ???
-            if var_count < min_alt_count || alt_frac < min_alt_frac {
+            
+            // let alt_frac_min = alt_frac.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+            let var_count_sum = var_count.iter().sum();
+            let alt_frac = var_count_sum as f64 / depth_sum as f64; 
+
+            if var_count_sum < min_alt_count || alt_frac < min_alt_frac {
                 continue;
             }
 
@@ -502,41 +490,48 @@ pub fn call_potential_snvs(
             // let p_miscall = *ln_align_params.emission_probs.not_equal;
             // let p_call = *LogProb::ln_one_minus_exp(&ln_align_params.emission_probs.not_equal);
 
-            let p_miscall = (0..pileup.len())
+            let p_miscall: Vec<LogProb> = (0..pileup.len())
                 .map(|i| all_alignment_parameters.get_ln_params(i).emission_probs.not_equal)
                 .collect();
-            let p_call = p_miscall.into_iter()
-                .map(|p| *LogProb::ln_one_minus_exp(p))
+
+            let p_call: Vec<LogProb> = p_miscall.iter()
+                .map(|p| LogProb::ln_one_minus_exp(p))
                 .collect();
 
-            let ln_half = *LogProb::from(Prob(0.5)); // ln(0.5)
-            let ln_two = *LogProb::from(Prob(2.0)); // ln(2)
-            let p_het =
-                *LogProb::ln_add_exp(LogProb(ln_half + p_call), LogProb(ln_half + p_miscall));
+            let ln_half = LogProb::from(Prob(0.5)); // ln(0.5)
+            let ln_two = LogProb::from(Prob(2.0)); // ln(2)
 
+            // ??? Probably should refuse from converting to f64
+            let p_het: Vec<LogProb> = (0..pileup.len())
+                .map(|i| LogProb::ln_add_exp(LogProb(*ln_half + *p_call[i]), LogProb(*ln_half + *p_miscall[i])))
+                .collect();
+                
             // raise the probability of observing allele to the power of number of times we observed that allele
             // fastest way of multiplying probabilities for independent events, where the
             // probabilities are all the same (either quality score or 1 - quality score)
 
-            // let p00 = LogProb(*prior_00 + p_call * ref_count as f64 + p_miscall * var_count as f64);
+            // let p00 = LogProb(*prior_00 + p_call.0 * ref_count[0] as f64 + p_miscall * var_count[0] as f64);
             // let p01 = LogProb(ln_two + *prior_01 + p_het * (ref_count + var_count) as f64);
             // let p11 = LogProb(*prior_11 + p_call * var_count as f64 + p_miscall * ref_count as f64);
 
+
+
             let p00 = (0..pileup.len())
-                .map(|i| *prior_00 + p_call[i] * ref_count[i] as f64 + p_miscall[i] * var_count[i] as f64)
-                .sum();
+                .map(|i| *prior_00 + *p_call[i] * ref_count[i] as f64 + *p_miscall[i] * var_count[i] as f64)
+                .sum() as LogProb;
 
             let p01 = (0..pileup.len())
-                .map(|i| ln_two + *prior_01 + p_het * (ref_count[i] + var_count[0]) as f64)
-                .sum();
+                .map(|i| *ln_two + *prior_01 + *p_het[i] * (ref_count[i] + var_count[0]) as f64)
+                .sum() as LogProb;
             
             let p11 = (0..pileup.len())
-                .map(|i| *prior_11 + p_call * var_count as f64 + p_miscall * ref_count as f64)
-                .sum();
+                .map(|i| *prior_11 + *p_call[i] * var_count[i] as f64 + *p_miscall[i] * ref_count[i] as f64)
+                .sum() as LogProb;
 
             // calculate the posterior probability of 0/0 genotype
-            // let p_total = LogProb::ln_sum_exp(&[p00, p01, p11]);
-            //let post_00 = p00 - p_total;
+
+            let p_total = LogProb::ln_sum_exp(&[p00, p01, p11]);
+            let post_00 = p00 - p_total;
             let snv_qual = LogProb::ln_add_exp(p01, p11) - p_total; //LogProb::ln_one_minus_exp(&post_00);
 
             next_valid_pos = (pos + 1) as u32;
@@ -544,14 +539,13 @@ pub fn call_potential_snvs(
             // check if SNV meets our quality criteria for a potential SNV
             // if it does, make a new variant and add it to the list of potential SNVs.
             if snv_qual > potential_snv_cutoff && ref_allele != 'N' && var_allele != 'N' {
-                let tid: usize = pileup[index].unwrap().tid() as usize;
+                let tid: usize = pileup[first_present].unwrap().tid() as usize;
                 let new_var = Var {
                     ix: 0,
                     // these will be set automatically,
-                    tid: tid as u32,
                     pos0: pos,
                     alleles: vec![ref_allele.to_string(), var_allele.to_string()],
-                    dp: depth,
+                    dp: depth_sum,
                     allele_counts: vec![0, 0],
                     allele_counts_forward: vec![0, 0],
                     allele_counts_reverse: vec![0, 0],
@@ -579,14 +573,14 @@ pub fn call_potential_snvs(
                 };
 
                 // we don't want potential SNVs that are inside a deletion, for instance.
-                next_valid_pos = pileup[index].unwrap().pos() + 1;
+                next_valid_pos = pileup[first_present].unwrap().pos() + 1;
 
                 varlist.push(new_var);
             }
         }
     }
     // return the vector of Vars as a VarList struct
-    Ok(VarList::new(varlist, target_names.clone())?)
+    Ok(VarList::new(varlist, bam_files_iteraction.target_names.clone())?)
 }
 
 // alignment: a rust-bio alignment object where x is a read consensus window, and y is the window from the reference
