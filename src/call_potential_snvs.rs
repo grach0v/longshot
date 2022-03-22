@@ -466,7 +466,7 @@ pub fn call_potential_snvs(
 
             
             // let alt_frac_min = alt_frac.iter().fold(f64::INFINITY, |a, &b| a.min(b));
-            let var_count_sum = var_count.iter().sum();
+            let var_count_sum: usize = var_count.iter().sum();
             let alt_frac = var_count_sum as f64 / depth_sum as f64; 
 
             if var_count_sum < min_alt_count || alt_frac < min_alt_frac {
@@ -516,17 +516,17 @@ pub fn call_potential_snvs(
 
 
 
-            let p00 = (0..pileup.len())
+            let p00 = LogProb::from((0..pileup.len())
                 .map(|i| *prior_00 + *p_call[i] * ref_count[i] as f64 + *p_miscall[i] * var_count[i] as f64)
-                .sum() as LogProb;
+                .sum::<f64>());
 
-            let p01 = (0..pileup.len())
+            let p01 = LogProb::from((0..pileup.len())
                 .map(|i| *ln_two + *prior_01 + *p_het[i] * (ref_count[i] + var_count[0]) as f64)
-                .sum() as LogProb;
+                .sum::<f64>());
             
-            let p11 = (0..pileup.len())
+            let p11 = LogProb::from((0..pileup.len())
                 .map(|i| *prior_11 + *p_call[i] * var_count[i] as f64 + *p_miscall[i] * ref_count[i] as f64)
-                .sum() as LogProb;
+                .sum::<f64>());
 
             // calculate the posterior probability of 0/0 genotype
 
@@ -540,7 +540,10 @@ pub fn call_potential_snvs(
             // if it does, make a new variant and add it to the list of potential SNVs.
             if snv_qual > potential_snv_cutoff && ref_allele != 'N' && var_allele != 'N' {
                 let tid: usize = pileup[first_present].unwrap().tid() as usize;
+                let chrom: String = bam_files_iteraction.file_index_tid_to_chrom[first_present][tid];
+
                 let new_var = Var {
+                    tid: bam_files_iteraction.chrom_to_target_id[&chrom] as u32,
                     ix: 0,
                     // these will be set automatically,
                     pos0: pos,

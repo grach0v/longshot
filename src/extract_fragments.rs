@@ -679,7 +679,8 @@ fn extract_var_cluster(
 
     if VERBOSE {
         for var in var_cluster.clone() {
-            eprint!("{} {}", var.tid, var.pos0);
+            // eprint!("{} {}", var.tid, var.pos0);
+            eprint!("{} {}", "tid is currently unavailable", var.pos0);
             for allele in var.alleles {
                 eprint!(" {}", allele);
             }
@@ -779,9 +780,13 @@ fn extract_var_cluster(
         }
 
         if VERBOSE {
+            // eprint!(
+            //     "adding call: {} {}",
+            //     var_cluster[v].tid, var_cluster[v].pos0
+            // );
             eprint!(
                 "adding call: {} {}",
-                var_cluster[v].tid, var_cluster[v].pos0
+                "tid is currently unavailable", var_cluster[v].pos0
             );
             for allele in &var_cluster[v].alleles {
                 eprint!(" {}", allele);
@@ -815,6 +820,7 @@ pub fn extract_fragment(
     target_names: &Vec<String>,
     extract_params: ExtractFragmentParameters,
     align_params: AlignmentParameters,
+    chrom: &String,
 ) -> Result<Option<Fragment>> {
     // TODO assert that every single variant in vars is on the same chromosome
     let id: String = u8_to_string(bam_record.qname())?;
@@ -854,7 +860,7 @@ pub fn extract_fragment(
     // populate a list with tuples of each variant, and anchor sequences for its alignment
     for ref var in vars {
         let var_interval = GenomicInterval {
-            chrom: target_names[var.tid as usize].clone(),
+            chrom: *chrom,
             start_pos: var.pos0 as u32,
             end_pos: var.pos0 as u32,
         };
@@ -952,7 +958,7 @@ pub fn extract_fragments(
     varlist: &mut VarList,
     intervals: &Option<Vec<GenomicInterval>>,
     extract_params: ExtractFragmentParameters,
-    align_params: AlignmentParameters,
+    allalign_params: &AllAlignParams,
 ) -> Result<Vec<Fragment>> {
 
     let mut prev_tid = u32::MAX as usize;
@@ -1010,7 +1016,7 @@ pub fn extract_fragments(
                         .chain_err(|| "Error creating augmented cigarlist.")?;
 
                 let interval = GenomicInterval {
-                    chrom: chrom,
+                    chrom: *chrom,
                     start_pos: start_pos as u32,
                     end_pos: end_pos as u32,
                 };
@@ -1041,7 +1047,8 @@ pub fn extract_fragments(
                     &ref_seq,
                     &bam_files_iteraction.file_index_tid_to_chrom[bam_i],
                     extract_params,
-                    align_params,
+                    *allalign_params.get_params(bam_i),
+                    chrom,
                 )
                 .chain_err(|| "Error extracting fragment from read.")?;
 
@@ -1147,7 +1154,7 @@ mod tests {
     fn generate_var2(ix: usize, tid: usize, pos0: usize, alleles: Vec<String>) -> Var {
         Var {
             ix: ix,
-            tid: tid as u32,
+            // tid: tid as u32,
             pos0: pos0,
             alleles: alleles,
             dp: 40,

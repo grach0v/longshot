@@ -69,7 +69,7 @@ pub fn print_vcf_header<W: Write>(
 
 pub fn print_vcf(
     varlist: &mut VarList,
-    interval: &Option<GenomicInterval>,
+    intervals: &Option<Vec<GenomicInterval>>,
     fasta_file: &Option<String>,
     output_vcf_file: &String,
     print_reference_genotype: bool,
@@ -77,7 +77,7 @@ pub fn print_vcf(
     density_params: &DensityParameters,
     sample_name: &String,
     print_outside_region: bool,
-    used_potential_variants_vcf: bool
+    used_potential_variants_vcf: bool,
 ) -> Result<()> {
     // first, add filter flags for variant density
     var_filter(
@@ -96,7 +96,7 @@ pub fn print_vcf(
     };
 
     let mut ref_seq: Vec<char> = vec![]; // this vector will be used to hold the reference sequence
-    let mut prev_tid = 4294967295;
+    let mut prev_tid = u32::MAX;
 
     let vcf_path = Path::new(output_vcf_file);
     let vcf_display = vcf_path.display();
@@ -106,166 +106,178 @@ pub fn print_vcf(
 
     print_vcf_header(&mut file, &vcf_display, sample_name, used_potential_variants_vcf, &fasta)?;
 
-    for var in &varlist.lst {
-        assert!(var.alleles.len() >= 2);
-        assert!(var.allele_counts.len() == var.alleles.len());
-        assert!(var.genotype_post.n_alleles() == var.alleles.len());
+    
+    let iterable_intervals: Vec<Option<GenomicInterval>> = match intervals {
+        Some(values) => {
+            values.into_iter().map(|x| Some(*x)).collect()
+        }
+        None => {
+            vec![None]
+        }
+    };
 
-        match interval {
-            &Some(ref iv) => {
-                if !print_outside_region
-                    && (var.tid != iv.tid
-                        || var.pos0 < iv.start_pos as usize
-                        || var.pos0 > iv.end_pos as usize)
-                {
+    for interval in iterable_intervals {
+
+        for var in &varlist.lst {
+            assert!(var.alleles.len() >= 2);
+            assert!(var.allele_counts.len() == var.alleles.len());
+            assert!(var.genotype_post.n_alleles() == var.alleles.len());
+
+            match interval {
+                Some(ref iv) => {
+                    if !print_outside_region
+                        && (var.tid != iv.tid
+                            || var.pos0 < iv.start_pos as usize
+                            || var.pos0 > iv.end_pos as usize)
+                    {
+                        continue;
+                    }
+                }
+                None => {}
+            }
+
+            if !print_reference_genotype {
+                if var.genotype == Genotype(0, 0) {
                     continue;
                 }
             }
-            &None => {}
-        }
 
-        if !print_reference_genotype {
-            if var.genotype == Genotype(0, 0) {
-                continue;
-            }
-        }
-
-        match fasta {
-            Some(ref mut fa) => {
-                // if we're on a different contig/chrom, we need to read in the sequence for that
-                // contig/chrom from the FASTA into the ref_seq vector
-                if var.tid != prev_tid {
-                    let mut ref_seq_u8: Vec<u8> = vec![];
-                    fa.fetch_all(&varlist.target_names[var.tid as usize])
-                        .chain_err(|| ErrorKind::IndexedFastaReadError)?;
-                    fa.read(&mut ref_seq_u8)
-                        .chain_err(|| ErrorKind::IndexedFastaReadError)?;
-                    ref_seq = dna_vec(&ref_seq_u8);
+            match fasta {
+                Some(ref mut fa) => {
+                    // if we're on a different contig/chrom, we need to read in the sequence for that
+                    // contig/chrom from the FASTA into the ref_seq vector
+                    if var.tid != prev_tid {
+                        let mut ref_seq_u8: Vec<u8> = vec![];
+                        fa.fetch_all(&varlist.target_names[var.tid as usize])
+                            .chain_err(|| ErrorKind::IndexedFastaReadError)?;
+                        fa.read(&mut ref_seq_u8)
+                            .chain_err(|| ErrorKind::IndexedFastaReadError)?;
+                        ref_seq = dna_vec(&ref_seq_u8);
+                    }
+                    prev_tid = var.tid;
                 }
-                prev_tid = var.tid;
+                None => {}
             }
-            None => {}
-        }
 
-        let ps = match var.phase_set {
-            Some(ps) => format!("{}", ps),
-            None => ".".to_string(),
-        };
+            let ps = match var.phase_set {
+                Some(ps) => format!("{}", ps),
+                None => ".".to_string(),
+            };
 
-        let allele_counts_str = var
-            .allele_counts
-            .clone()
-            .iter()
-            .map(|x| x.to_string())
-            .collect::<Vec<String>>()
-            .join(",");
-        let mut post_vec: Vec<String> = vec![];
-        for g in var.possible_genotypes() {
-            let mut p = *PHREDProb::from(var.genotype_post.get(g));
-            if p > 500.0 {
-                p = 500.0;
-            }
-            post_vec.push(format!("{:.2}", p));
-        }
-
-        let post_str = post_vec.join(",");
-
-        let mut var_alleles: Vec<String> = vec![];
-        for allele in var.alleles[1..].iter() {
-            var_alleles.push(allele.clone());
-        }
-
-        assert!(var_alleles.len() == var.alleles.len() - 1);
-
-        let sep = match var.phase_set {
-            Some(_) => "|",
-            None => "/",
-        };
-
-        let genotype_str = vec![var.genotype.0.to_string(), var.genotype.1.to_string()].join(sep);
-        let unphased_genotype_str = vec![
-            var.unphased_genotype.0.to_string(),
-            var.unphased_genotype.1.to_string(),
-        ]
-        .join("/");
-
-        let genotypes_match: usize = (var.genotype == var.unphased_genotype
-            || Genotype(var.genotype.1, var.genotype.0) == var.unphased_genotype)
-            as usize;
-
-        // we want to save the sequence context (21 bp window around variant on reference)
-        // this will be printed to the VCF later and may help diagnose variant calling
-        // issues e.g. if the variant occurs inside a large homopolymer or etc.
-        let sequence_context: String = match fasta {
-            Some(_) => {
-                // get the position 10 bases to the left
-                let l_window = if var.pos0 >= 10 {
-                    var.pos0 as usize - 10
-                } else {
-                    0
-                };
-                // get the position 11 bases to the right
-                let mut r_window = var.pos0 as usize + 11;
-                if r_window >= ref_seq.len() {
-                    r_window = ref_seq.len();
+            let allele_counts_str = var
+                .allele_counts
+                .clone()
+                .iter()
+                .map(|x| x.to_string())
+                .collect::<Vec<String>>()
+                .join(",");
+            let mut post_vec: Vec<String> = vec![];
+            for g in var.possible_genotypes() {
+                let mut p = *PHREDProb::from(var.genotype_post.get(g));
+                if p > 500.0 {
+                    p = 500.0;
                 }
-
-                (ref_seq[l_window..r_window]).iter().collect::<String>()
+                post_vec.push(format!("{:.2}", p));
             }
-            None => "None".to_string(),
-        };
 
-        write!(file,
-                       "{}\t{}\t.\t{}\t{}\t{:.0}\t{}\tDP={};AC={};AM={};MC={};MF={:.3};MB={:.3};AQ={:.2};GM={};",
-                       varlist.target_names[var.tid as usize],
-                       var.pos0 + 1,
-                       var.alleles[0],
-                       var_alleles.join(","),
-                       var.qual+0.4999, // round off to integer, 09/04/2020
-                       var.filter,
-                       var.dp,
-                       allele_counts_str,
-                       var.ambiguous_count,
-                       var.mec,
-                       var.mec_frac_variant,
-                       var.mec_frac_block,
-                       var.mean_allele_qual,
-                       genotypes_match).chain_err(|| ErrorKind::FileWriteError(vcf_display.to_string()))?;
+            let post_str = post_vec.join(",");
 
-        if !used_potential_variants_vcf {
+            let mut var_alleles: Vec<String> = vec![];
+            for allele in var.alleles[1..].iter() {
+                var_alleles.push(allele.clone());
+            }
+
+            assert!(var_alleles.len() == var.alleles.len() - 1);
+
+            let sep = match var.phase_set {
+                Some(_) => "|",
+                None => "/",
+            };
+
+            let genotype_str = vec![var.genotype.0.to_string(), var.genotype.1.to_string()].join(sep);
+            let unphased_genotype_str = vec![
+                var.unphased_genotype.0.to_string(),
+                var.unphased_genotype.1.to_string(),
+            ]
+            .join("/");
+
+            let genotypes_match: usize = (var.genotype == var.unphased_genotype
+                || Genotype(var.genotype.1, var.genotype.0) == var.unphased_genotype)
+                as usize;
+
+            // we want to save the sequence context (21 bp window around variant on reference)
+            // this will be printed to the VCF later and may help diagnose variant calling
+            // issues e.g. if the variant occurs inside a large homopolymer or etc.
+            let sequence_context: String = match fasta {
+                Some(_) => {
+                    // get the position 10 bases to the left
+                    let l_window = if var.pos0 >= 10 {
+                        var.pos0 as usize - 10
+                    } else {
+                        0
+                    };
+                    // get the position 11 bases to the right
+                    let mut r_window = var.pos0 as usize + 11;
+                    if r_window >= ref_seq.len() {
+                        r_window = ref_seq.len();
+                    }
+
+                    (ref_seq[l_window..r_window]).iter().collect::<String>()
+                }
+                None => "None".to_string(),
+            };
+
             write!(file,
-                     "DA={};MQ10={:.2};MQ20={:.2};MQ30={:.2};MQ40={:.2};MQ50={:.2};",
-                     var.dp_any_mq,
-                     var.mq10_frac,
-                     var.mq20_frac,
-                     var.mq30_frac,
-                     var.mq40_frac,
-                     var.mq50_frac).chain_err(|| ErrorKind::FileWriteError(vcf_display.to_string()))?;
-        }
-        writeln!(file,
-                 "PH={};SC={};\tGT:GQ:DP:PS:UG:UQ\t{}:{:.0}:{}:{}:{}:{:.2}",
-                 post_str,
-                 sequence_context,
-                 genotype_str,
-                 var.gq+0.4999, // round off to integer
-		 var.dp,
-                 ps,
-                 unphased_genotype_str,
-                 var.unphased_gq).chain_err(|| ErrorKind::FileWriteError(vcf_display.to_string()))?;
+                        "{}\t{}\t.\t{}\t{}\t{:.0}\t{}\tDP={};AC={};AM={};MC={};MF={:.3};MB={:.3};AQ={:.2};GM={};",
+                        varlist.target_names[var.tid as usize],
+                        var.pos0 + 1,
+                        var.alleles[0],
+                        var_alleles.join(","),
+                        var.qual+0.4999, // round off to integer, 09/04/2020
+                        var.filter,
+                        var.dp,
+                        allele_counts_str,
+                        var.ambiguous_count,
+                        var.mec,
+                        var.mec_frac_variant,
+                        var.mec_frac_block,
+                        var.mean_allele_qual,
+                        genotypes_match).chain_err(|| ErrorKind::FileWriteError(vcf_display.to_string()))?;
 
+            if !used_potential_variants_vcf {
+                write!(file,
+                        "DA={};MQ10={:.2};MQ20={:.2};MQ30={:.2};MQ40={:.2};MQ50={:.2};",
+                        var.dp_any_mq,
+                        var.mq10_frac,
+                        var.mq20_frac,
+                        var.mq30_frac,
+                        var.mq40_frac,
+                        var.mq50_frac).chain_err(|| ErrorKind::FileWriteError(vcf_display.to_string()))?;
+            }
+            writeln!(file,
+                    "PH={};SC={};\tGT:GQ:DP:PS:UG:UQ\t{}:{:.0}:{}:{}:{}:{:.2}",
+                    post_str,
+                    sequence_context,
+                    genotype_str,
+                    var.gq+0.4999, // round off to integer
+            var.dp,
+                    ps,
+                    unphased_genotype_str,
+                    var.unphased_gq).chain_err(|| ErrorKind::FileWriteError(vcf_display.to_string()))?;
+
+        }
     }
     Ok(())
 }
 
 pub fn print_variant_debug(
     varlist: &mut VarList,
-    interval: &Option<GenomicInterval>,
+    intervals: &Option<Vec<GenomicInterval>>,
     variant_debug_directory: &Option<String>,
     debug_filename: &str,
     max_cov: u32,
     density_params: &DensityParameters,
-    sample_name: &String,
-) -> Result<()> {
+    sample_name: &String) -> Result<()> {
     match variant_debug_directory {
         &Some(ref dir) => {
             let outfile = match Path::new(&dir).join(&debug_filename).to_str() {
@@ -276,7 +288,7 @@ pub fn print_variant_debug(
             };
             print_vcf(
                 varlist,
-                &interval,
+                &intervals,
                 &None,
                 &outfile,
                 true,

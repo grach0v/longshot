@@ -379,7 +379,7 @@ fn run() -> Result<()> {
         .values_of("Region")
     {
         Some(regions) => {
-            regions.map(|region| parse_region_string(region, &bam_files_iteraction.chrom_to_len).ok()).collect()
+            regions.map(|region| parse_region_string(region, &bam_files_iteraction.chrom_to_len, &bam_files_iteraction.chrom_to_target_id).ok()).collect()
             // bamfile_names.into_iter().zip(regions.into_iter()).map(|(bam_file, region)| parse_region_string(region, &bam_file).ok()).collect()
         }
         None => None,
@@ -690,32 +690,17 @@ fn run() -> Result<()> {
             .chain_err(|| "Error calling potential SNVs.")?
         }
     };
-    /*let mut varlist = call_potential_snvs::call_potential_snvs(
-        &bamfile_name,
-        &fasta_file,
-        &interval,
-        &genotype_priors,
-        min_cov,
-        max_cov,
-        potential_snv_min_alt_count,
-        potential_snv_min_alt_frac,
-        min_mapq,
-        alignment_parameters.ln(),
-        potential_snv_cutoff,
-    )
-    .chain_err(|| "Error calling potential SNVs.")?;*/
 
-    for &interval in intervals.iter().flatten() {
-        print_variant_debug(
-            &mut varlist,
-            &Some(interval),
-            &variant_debug_directory,
-            &"1.0.potential_SNVs.vcf",
-            max_cov,
-            &density_params,
-            &sample_name,
-        )?;
-    }
+    
+    print_variant_debug(
+        &mut varlist,
+        &intervals,
+        &variant_debug_directory,
+        &"1.0.potential_SNVs.vcf",
+        max_cov,
+        &density_params,
+        &sample_name
+    )?;
     eprintln!(
         "{} {} potential variants identified.",
         print_time(),
@@ -725,22 +710,21 @@ fn run() -> Result<()> {
     if varlist.lst.len() == 0 {
         /* no variants identified, but still print empty VCF file with header, 02/12/20 */
         eprintln!("No candidate variants identified, printing empty VCF file...");
-        for &interval in intervals.iter().flatten() {
-            print_vcf(
-                &mut varlist,
-                &Some(interval),
-                &Some(fasta_file),
-                &output_vcf_file,
-                false,
-                max_cov,
-                &density_params,
-                &sample_name,
-                false,
-                potential_variants_file != None,
-            )
-            .chain_err(|| "Error printing VCF output.")?;
-            return Ok(());
-        }
+        print_vcf(
+            &mut varlist,
+            &intervals,
+            &Some(fasta_file),
+            &output_vcf_file,
+            false,
+            max_cov,
+            &density_params,
+            &sample_name,
+            false,
+            potential_variants_file != None,
+        )
+        .chain_err(|| "Error printing VCF output.")?;
+        return Ok(());
+    
     }
 
     /***********************************************************************************************/
@@ -752,12 +736,12 @@ fn run() -> Result<()> {
         print_time()
     );
     let mut flist = extract_fragments::extract_fragments(
-        &bamfile_name,
+        &bam_files_iteraction,
         &fasta_file,
         &mut varlist,
-        &interval,
+        &intervals,
         extract_fragment_parameters,
-        alignment_parameters,
+        &all_alignment_parameters,
     )
     .chain_err(|| "Error generating haplotype fragments from BAM reads.")?;
 
@@ -843,7 +827,7 @@ fn run() -> Result<()> {
 
     print_variant_debug(
         &mut varlist,
-        &interval,
+        &intervals,
         &variant_debug_directory,
         &"2.0.realigned_genotypes.vcf",
         max_cov,

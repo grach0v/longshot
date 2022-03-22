@@ -99,7 +99,8 @@ pub fn parse_flag(argmatch: &ArgMatches, arg_name: &str) -> Result<bool> {
 // this is really ugly. TODO a less verbose implementation
 pub fn parse_region_string(
     region_string: &str,
-    chrom_lengths: &HashMap<String, u32>
+    chrom_lengths: &HashMap<String, u32>,
+    chrom_to_target_id: &HashMap<String, usize>
 ) -> Result<GenomicInterval> {
 
     match region_string {
@@ -138,6 +139,7 @@ pub fn parse_region_string(
             );
 
             Ok(GenomicInterval {
+                tid: chrom_to_target_id[&iv_chrom] as u32,
                 chrom: iv_chrom,
                 start_pos: iv_start - 1, // convert to 0-based inclusive range
                 end_pos: iv_end - 1,     // convert to 0-based inclusive range
@@ -150,6 +152,7 @@ pub fn parse_region_string(
             let tlen = chrom_lengths[&r_str];
 
             Ok(GenomicInterval {
+                tid: chrom_to_target_id[&r_str] as u32,
                 chrom: r_str,
                 start_pos: 0,
                 end_pos: tlen - 1,
@@ -163,6 +166,7 @@ pub fn parse_region_string(
 // Enum ?
 // Save max number and then correct
 pub struct GenomicInterval {
+    pub tid: u32,
     pub chrom: String,
     // chromosome name
     pub start_pos: u32,
@@ -185,7 +189,8 @@ pub struct OpenedBamFiles {
     pub chrom_to_tid: HashMap<String, Vec<i32>>,
     pub chrom_to_len: HashMap<String, u32>,
     pub file_index_tid_to_chrom: Vec<Vec<String>>,
-    pub target_names: Vec<String>
+    pub target_names: Vec<String>,
+    pub chrom_to_target_id: HashMap<String, usize>
 }
 
 impl OpenedBamFiles {
@@ -247,6 +252,15 @@ impl OpenedBamFiles {
             }
         }
 
+        let target_names: Vec<String> = chrom_to_len.keys().cloned().collect();
+        // let chrom_to_target_id = HashMap::from(target_names.enumerate().map(|tid, name| (tid, name)))
+
+        let test: Vec<(String, usize)> = target_names.into_iter()
+                                                     .enumerate()
+                                                     .map(|(tid, name)| (name, tid))
+                                                     .collect::<Vec<(String, usize)>>();
+
+
         Ok(
             OpenedBamFiles {
                 file_names: names,
@@ -255,7 +269,8 @@ impl OpenedBamFiles {
                 chrom_to_tid: chrom_to_tid,
                 chrom_to_len: chrom_to_len,
                 file_index_tid_to_chrom: file_index_tid_to_chrom,
-                target_names: chrom_to_len.keys().cloned().collect()
+                target_names: target_names,
+                chrom_to_target_id: target_names.into_iter().enumerate().map(|(i, name)| (name, i)).collect(),
             }
         )
     }
@@ -361,6 +376,7 @@ pub fn get_whole_genome_intervals(bam_files_iteraction: &OpenedBamFiles) -> Resu
 
     for chrom in bam_files_iteraction.target_names {
         intervals.push(GenomicInterval {
+            tid: bam_files_iteraction.chrom_to_target_id[&chrom] as u32,
             chrom: chrom,
             start_pos: 0,
             end_pos: bam_files_iteraction.chrom_to_len[&chrom] - 1

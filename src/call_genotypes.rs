@@ -7,7 +7,7 @@
 // use declarations
 use bio::stats::{LogProb, PHREDProb, Prob};
 use chrono::prelude::*;
-use rand::{Rng, SeedableRng, StdRng};
+use rand::rngs::StdRng;
 
 use errors::*;
 use genotype_probs::*;
@@ -296,7 +296,7 @@ pub fn call_genotypes_with_haplotypes(
 
     let max_iterations: usize = 1000000;
     let ln_half = LogProb::from(Prob(0.5));
-    let mut rng: StdRng = StdRng::from_seed(&[0]);
+    let mut rng: StdRng = StdRng::seed_from_u64(0);
     let print_time: fn() -> String = || Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
     let hap_ixs = vec![0, 1];
