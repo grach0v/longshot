@@ -7,6 +7,8 @@
 // use declarations
 use bio::stats::{LogProb, PHREDProb, Prob};
 use chrono::prelude::*;
+use rand::{Rng, SeedableRng};
+use rand::seq::SliceRandom;
 use rand::rngs::StdRng;
 
 use errors::*;
@@ -280,7 +282,7 @@ pub fn call_genotypes_no_haplotypes(
 pub fn call_genotypes_with_haplotypes(
     flist: &mut Vec<Fragment>,
     varlist: &mut VarList,
-    interval: &Option<GenomicInterval>,
+    intervals: &Option<Vec<GenomicInterval>>,
     genotype_priors: &GenotypePriors,
     variant_debug_directory: &Option<String>,
     program_step: usize,
@@ -324,7 +326,7 @@ pub fn call_genotypes_with_haplotypes(
             && var.alleles[0].len() == 1
             && var.alleles[1].len() == 1
         {
-            if rng.next_f64() < 0.5 {
+            if rng.gen::<f64>() < 0.5 {
                 var.genotype = Genotype(0, 1);
             } else {
                 var.genotype = Genotype(1, 0);
@@ -563,7 +565,7 @@ pub fn call_genotypes_with_haplotypes(
             // loop over the set of variants v in random order
             let mut ixvec: Vec<usize> = (0..varlist.lst.len()).collect();
             let ixslice: &mut [usize] = ixvec.as_mut_slice();
-            rng.shuffle(ixslice);
+            ixslice.shuffle(&mut rng);
 
             for v_r in ixslice {
                 let v = *v_r;
@@ -788,7 +790,7 @@ pub fn call_genotypes_with_haplotypes(
             .to_owned();
         print_variant_debug(
             varlist,
-            &interval,
+            &intervals,
             &variant_debug_directory,
             &debug_vcf_str,
             max_cov,

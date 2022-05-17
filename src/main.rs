@@ -41,8 +41,7 @@ use call_genotypes::*;
 use clap::{App, Arg};
 use errors::*;
 use estimate_alignment_parameters::estimate_alignment_parameters;
-use estimate_read_coverage::calculate_numerator_denumerator_coverage;
-// use estimate_read_coverage::calculate_mean_coverage;
+use estimate_read_coverage::calculate_mean_coverage;
 use extract_fragments::ExtractFragmentParameters;
 use fishers_exact::fishers_exact;
 use genotype_probs::{Genotype, GenotypePriors};
@@ -373,7 +372,7 @@ fn run() -> Result<()> {
         .to_string();
 
 
-    let bam_files_iteraction = OpenedBamFiles::new(bamfile_names)?;
+    let mut bam_files_iteraction = OpenedBamFiles::new(bamfile_names)?;
 
     let intervals: Option<Vec<GenomicInterval>> = match input_args
         .values_of("Region")
@@ -535,35 +534,8 @@ fn run() -> Result<()> {
             );
             eprintln!("{} Estimating mean read coverage...", print_time());
 
-            // ??? this is why intervals should be changed
-            let mean_coverage: f64;
-            {   // Calculate avearage
-
-
-                let mut numerator: usize = 0; 
-                let mut denumerator: usize = 0;
-                
-                if let Some(real_intervals) = intervals {
-                    for bamfile_name in bamfile_names {
-                        for interval in real_intervals {
-                            let (num, den) = calculate_numerator_denumerator_coverage(&bamfile_name, &Some(interval))
-                                          .chain_err(|| "Error calculating numerator and denumerator of coverage for BAM file.")?;
-                         numerator += num;
-                         denumerator += den;
-                        }
-                    }
-                } else {
-                    for bamfile_name in bamfile_names {
-                        let (num, den) = calculate_numerator_denumerator_coverage(&bamfile_name, &None) // ??? &None
-                                        .chain_err(|| "Error calculating numerator and denumerator of coverage for BAM file.")?;
-                        numerator += num;
-                        denumerator += den;
-                    }
-                }
-            
-                // ??? check if nan?
-                mean_coverage = numerator as f64 / denumerator as f64;
-            }
+            let mean_coverage: f64 = calculate_mean_coverage(&bam_files_iteraction, &intervals)
+                .chain_err(|| "Error calculating numerator and denumerator of coverage for BAM file.")?;
 
             let calculated_max_cov =
                 (mean_coverage as f64 + 5.0 * (mean_coverage as f64).sqrt()) as u32;
@@ -614,28 +586,15 @@ fn run() -> Result<()> {
         store_read_id,
     };
 
-    let vec_parameters: Vec<AlignmentParameters> = match intervals
-    {
-        Some(good_intervals) => {
-            bamfile_names.iter().zip(good_intervals.iter())
-                .map(|(bam_file, &interval)| estimate_alignment_parameters(
-                    &bam_file, &fasta_file, &Some(interval), 
-                    min_mapq, max_cigar_indel as u32)
-                    .chain_err(|| "Error estimation alignment parameters."))
-                    .collect::<Result<_>>()?
-        }
-
-        None => {
-            bamfile_names.iter()
-            .map(|bam_file| estimate_alignment_parameters(
-                &bam_file, &fasta_file, &None, 
-                min_mapq, max_cigar_indel as u32)
-                .chain_err(|| "Error estimation alignment parameters."))
-                .collect::<Result<_>>()?
-        }
-
-    };
-
+    // ??? looks like not good design
+    let vec_parameters: Vec<AlignmentParameters> = estimate_alignment_parameters(
+        &bam_files_iteraction, 
+        &fasta_file, 
+        &intervals,
+        min_mapq, 
+        max_cigar_indel as u32
+    )?;
+    
     // ??? constructor
     let all_alignment_parameters = AllAlignParams::new(&vec_parameters);
 
@@ -675,7 +634,7 @@ fn run() -> Result<()> {
             eprintln!("{} Calling potential SNVs using pileup...", print_time());
 
             call_potential_snvs::call_potential_snvs(
-                &bam_files_iteraction,
+                &mut bam_files_iteraction,
                 &fasta_file,
                 &intervals,
                 &genotype_priors,
@@ -839,7 +798,7 @@ fn run() -> Result<()> {
     if no_haps {
         print_vcf(
             &mut varlist,
-            &interval,
+            &intervals,
             &None,
             &output_vcf_file,
             output_rg, // change to command line parameter output_ref
@@ -863,7 +822,7 @@ fn run() -> Result<()> {
     call_genotypes_with_haplotypes(
         &mut flist,
         &mut varlist,
-        &interval,
+        &intervals,
         &genotype_priors,
         &variant_debug_directory,
         3,
@@ -958,7 +917,7 @@ fn run() -> Result<()> {
                 "{} Writing haplotype-assigned reads to bam files...",
                 print_time()
             );
-            separate_bam_reads_by_haplotype(&bamfile_name, &interval, filename, &h1, &h2, min_mapq)
+            separate_bam_reads_by_haplotype(&bam_files_iteraction, &intervals, filename, &h1, &h2, min_mapq)
                 .chain_err(|| "Error separating BAM reads by haplotype.")?;
         }
         None => {}
@@ -968,7 +927,7 @@ fn run() -> Result<()> {
     eprintln!("{} Printing VCF file...", print_time());
     print_variant_debug(
         &mut varlist,
-        &interval,
+        &intervals,
         &variant_debug_directory,
         "4.0.final_genotypes.vcf",
         max_cov,
@@ -977,7 +936,7 @@ fn run() -> Result<()> {
     )?;
     print_vcf(
         &mut varlist,
-        &interval,
+        &intervals,
         &Some(fasta_file),
         &output_vcf_file,
         output_rg, // change to command line parameter output_ref

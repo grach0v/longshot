@@ -147,7 +147,7 @@ pub fn parse_region_string(
         }
         r => {
             let r_str = r.to_string();
-            let mut tid: u32 = 0;
+            // let mut tid: u32 = 0;
 
             let tlen = chrom_lengths[&r_str];
 
@@ -217,12 +217,13 @@ impl OpenedBamFiles {
         let mut chrom_to_len: HashMap<String, u32>;
         let mut file_index_tid_to_chrom: Vec<Vec<String>>;
 
-        for (bam, bam_index) in bam_files.into_iter().zip(0 .. bam_files.len()) {
+        for (bam_index, bam) in bam_files.into_iter().enumerate() {
             let cur_names = parse_target_names_opened(&bam)?;
             file_index_tid_to_chrom.push(vec![]);
 
             for chrom in chrom_to_tid.keys() {
-                let Some(vec) = chrom_to_tid.get(chrom);
+                // let Some(vec) = chrom_to_tid.get(chrom);
+                let vec = chrom_to_tid.get(chrom).unwrap();
                 vec.push(-1);
             }
 
@@ -255,10 +256,10 @@ impl OpenedBamFiles {
         let target_names: Vec<String> = chrom_to_len.keys().cloned().collect();
         // let chrom_to_target_id = HashMap::from(target_names.enumerate().map(|tid, name| (tid, name)))
 
-        let test: Vec<(String, usize)> = target_names.into_iter()
-                                                     .enumerate()
-                                                     .map(|(tid, name)| (name, tid))
-                                                     .collect::<Vec<(String, usize)>>();
+        // let test: Vec<(String, usize)> = target_names.into_iter()
+        //                                              .enumerate()
+        //                                              .map(|(tid, name)| (name, tid))
+        //                                              .collect::<Vec<(String, usize)>>();
 
 
         Ok(

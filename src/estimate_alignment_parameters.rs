@@ -9,7 +9,6 @@ use bio::io::fasta;
 use errors::*;
 use extract_fragments::{create_augmented_cigarlist, CigarPos};
 use realignment::*;
-use rust_htslib::bam;
 use rust_htslib::bam::record::Cigar;
 use rust_htslib::bam::record::CigarStringView;
 use rust_htslib::bam::Read;
@@ -373,15 +372,15 @@ pub fn count_alignment_events(
 /// - ```IndexedFastaReadError```: error reading a record from the FASTA
 /// - Any errors incurred while creating the augmented cigar list or counting alignment events.
 pub fn estimate_alignment_parameters(
-    bam_file: &String,
+    mut bam_files_iteraction: &OpenedBamFiles,
     fasta_file: &String,
-    interval: &Option<GenomicInterval>,
+    intervals: &Option<Vec<GenomicInterval>>,
     min_mapq: u8,
     max_cigar_indel: u32,
-) -> Result<AlignmentParameters> {
-    let t_names = parse_target_names(&bam_file)?;
+) -> Result<Vec<AlignmentParameters>> {
+    let t_names = &bam_files_iteraction.target_names;
 
-    let mut prev_tid = 4294967295; // huge value so that tid != prev_tid on first iter
+    let mut prev_tid = usize::MAX;
     let mut fasta = fasta::IndexedReader::from_file(fasta_file)
         .chain_err(|| ErrorKind::IndexedFastaOpenError)?;
     let mut ref_seq: Vec<char> = vec![];
@@ -405,128 +404,135 @@ pub fn estimate_alignment_parameters(
 
     // interval_lst has either the single specified genomic region, or list of regions covering all chromosomes
     // for more information about this design decision, see get_interval_lst implementation in util.rs
-    let interval_lst: Vec<GenomicInterval> = get_interval_lst(bam_file, interval)?;
-    let mut bam_ix =
-        bam::IndexedReader::from_path(bam_file).chain_err(|| ErrorKind::IndexedBamOpenError)?;
+    let interval_lst: Vec<GenomicInterval> = get_interval_lst(bam_files_iteraction, intervals)?;
+    // let mut bam_ix =
+    //     bam::IndexedReader::from_path(bam_file).chain_err(|| ErrorKind::IndexedBamOpenError)?;
 
-    for iv in interval_lst {
-        bam_ix
-            .fetch(iv.tid, iv.start_pos, iv.end_pos + 1)
-            .chain_err(|| ErrorKind::IndexedBamFetchError)?;
+    let mut all_params: Vec<AlignmentParameters>;
 
-        for r in bam_ix.records() {
-            let record = r.chain_err(|| ErrorKind::IndexedBamRecordReadError)?;
+    for mut bam_ix in &mut bam_files_iteraction.open_indexed_files {
 
-            // check that the read doesn't fail any standard filters
-            if record.mapq() < min_mapq
-                || record.is_unmapped()
-                || record.is_secondary()
-                || record.is_quality_check_failed()
-                || record.is_duplicate()
-                || record.is_supplementary()
-            {
-                continue;
+        for iv in &interval_lst {
+
+            bam_ix
+                .fetch((iv.tid, iv.start_pos, iv.end_pos + 1))
+                .chain_err(|| ErrorKind::IndexedBamFetchError)?;
+
+            for r in bam_ix.records() {
+                let record = r.chain_err(|| ErrorKind::IndexedBamRecordReadError)?;
+
+                // check that the read doesn't fail any standard filters
+                if record.mapq() < min_mapq
+                    || record.is_unmapped()
+                    || record.is_secondary()
+                    || record.is_quality_check_failed()
+                    || record.is_duplicate()
+                    || record.is_supplementary()
+                {
+                    continue;
+                }
+
+                // if we're on a different contig/chrom than the previous BAM record, we need to read
+                // in the sequence for that contig/chrom from the FASTA into the ref_seq vector
+                let tid: usize = record.tid() as usize;
+                let chrom: String = t_names[record.tid() as usize].clone();
+                if tid != prev_tid {
+                    let mut ref_seq_u8: Vec<u8> = vec![];
+                    fasta
+                        .fetch_all(&chrom)
+                        .chain_err(|| ErrorKind::IndexedFastaReadError)?;
+                    fasta
+                        .read(&mut ref_seq_u8)
+                        .chain_err(|| ErrorKind::IndexedFastaReadError)?;
+                    ref_seq = dna_vec(&ref_seq_u8);
+                }
+
+                // create a vector of CigarPos from the BAM record
+                // these contain the CIGAR operation as well as the reference and read positions
+                // where it occurs in the BAM alignment
+                let read_seq: Vec<char> = dna_vec(&record.seq().as_bytes());
+                let bam_cig: CigarStringView = record.cigar();
+                let cigarpos_list: Vec<CigarPos> =
+                    create_augmented_cigarlist(record.pos() as u32, &bam_cig)
+                        .chain_err(|| "Error creating augmented cigarlist.")?;
+
+                // count the emission and transition events directly from the record's CIGAR and sequences
+                let (read_transition_counts, read_emission_counts) =
+                    count_alignment_events(&cigarpos_list, &ref_seq, &read_seq, max_cigar_indel)
+                        .chain_err(|| "Error counting cigar alignment events.")?;
+
+                // add emission and transition counts to the running total
+                transition_counts.add(read_transition_counts);
+                emission_counts.add(read_emission_counts);
+
+                prev_tid = tid;
             }
-
-            // if we're on a different contig/chrom than the previous BAM record, we need to read
-            // in the sequence for that contig/chrom from the FASTA into the ref_seq vector
-            let tid: usize = record.tid() as usize;
-            let chrom: String = t_names[record.tid() as usize].clone();
-            if tid != prev_tid {
-                let mut ref_seq_u8: Vec<u8> = vec![];
-                fasta
-                    .fetch_all(&chrom)
-                    .chain_err(|| ErrorKind::IndexedFastaReadError)?;
-                fasta
-                    .read(&mut ref_seq_u8)
-                    .chain_err(|| ErrorKind::IndexedFastaReadError)?;
-                ref_seq = dna_vec(&ref_seq_u8);
-            }
-
-            // create a vector of CigarPos from the BAM record
-            // these contain the CIGAR operation as well as the reference and read positions
-            // where it occurs in the BAM alignment
-            let read_seq: Vec<char> = dna_vec(&record.seq().as_bytes());
-            let bam_cig: CigarStringView = record.cigar();
-            let cigarpos_list: Vec<CigarPos> =
-                create_augmented_cigarlist(record.pos() as u32, &bam_cig)
-                    .chain_err(|| "Error creating augmented cigarlist.")?;
-
-            // count the emission and transition events directly from the record's CIGAR and sequences
-            let (read_transition_counts, read_emission_counts) =
-                count_alignment_events(&cigarpos_list, &ref_seq, &read_seq, max_cigar_indel)
-                    .chain_err(|| "Error counting cigar alignment events.")?;
-
-            // add emission and transition counts to the running total
-            transition_counts.add(read_transition_counts);
-            emission_counts.add(read_emission_counts);
-
-            prev_tid = tid;
         }
+
+        // place the transition and emission counts together in an AlignmentCounts struct
+        let alignment_counts = AlignmentCounts {
+            transition_counts: transition_counts,
+            emission_counts: emission_counts,
+        };
+
+        // convert the alignment counts from the BAM into probabilities
+        let params = alignment_counts.to_parameters();
+
+        // print the estimated alignment parameters to STDERR
+        eprintln!("{} Done estimating alignment parameters.", print_time());
+        eprintln!("");
+
+        eprintln!("{} Transition Probabilities:", SPACER);
+        eprintln!(
+            "{} match -> match:          {:.3}",
+            SPACER, params.transition_probs.match_from_match
+        );
+        eprintln!(
+            "{} match -> insertion:      {:.3}",
+            SPACER, params.transition_probs.insertion_from_match
+        );
+        eprintln!(
+            "{} match -> deletion:       {:.3}",
+            SPACER, params.transition_probs.deletion_from_match
+        );
+        eprintln!(
+            "{} deletion -> match:       {:.3}",
+            SPACER, params.transition_probs.match_from_deletion
+        );
+        eprintln!(
+            "{} deletion -> deletion:    {:.3}",
+            SPACER, params.transition_probs.deletion_from_deletion
+        );
+        eprintln!(
+            "{} insertion -> match:      {:.3}",
+            SPACER, params.transition_probs.match_from_insertion
+        );
+        eprintln!(
+            "{} insertion -> insertion:  {:.3}",
+            SPACER, params.transition_probs.insertion_from_insertion
+        );
+        eprintln!("");
+
+        eprintln!("{} Emission Probabilities:", SPACER);
+        eprintln!(
+            "{} match (equal):           {:.3}",
+            SPACER, params.emission_probs.equal
+        );
+        eprintln!(
+            "{} match (not equal):       {:.3}",
+            SPACER, params.emission_probs.not_equal
+        );
+        eprintln!(
+            "{} insertion:               {:.3}",
+            SPACER, params.emission_probs.insertion
+        );
+        eprintln!(
+            "{} deletion:                {:.3}",
+            SPACER, params.emission_probs.deletion
+        );
+        eprintln!("");
+
+        all_params.push(params);
     }
-
-    // place the transition and emission counts together in an AlignmentCounts struct
-    let alignment_counts = AlignmentCounts {
-        transition_counts: transition_counts,
-        emission_counts: emission_counts,
-    };
-
-    // convert the alignment counts from the BAM into probabilities
-    let params = alignment_counts.to_parameters();
-
-    // print the estimated alignment parameters to STDERR
-    eprintln!("{} Done estimating alignment parameters.", print_time());
-    eprintln!("");
-
-    eprintln!("{} Transition Probabilities:", SPACER);
-    eprintln!(
-        "{} match -> match:          {:.3}",
-        SPACER, params.transition_probs.match_from_match
-    );
-    eprintln!(
-        "{} match -> insertion:      {:.3}",
-        SPACER, params.transition_probs.insertion_from_match
-    );
-    eprintln!(
-        "{} match -> deletion:       {:.3}",
-        SPACER, params.transition_probs.deletion_from_match
-    );
-    eprintln!(
-        "{} deletion -> match:       {:.3}",
-        SPACER, params.transition_probs.match_from_deletion
-    );
-    eprintln!(
-        "{} deletion -> deletion:    {:.3}",
-        SPACER, params.transition_probs.deletion_from_deletion
-    );
-    eprintln!(
-        "{} insertion -> match:      {:.3}",
-        SPACER, params.transition_probs.match_from_insertion
-    );
-    eprintln!(
-        "{} insertion -> insertion:  {:.3}",
-        SPACER, params.transition_probs.insertion_from_insertion
-    );
-    eprintln!("");
-
-    eprintln!("{} Emission Probabilities:", SPACER);
-    eprintln!(
-        "{} match (equal):           {:.3}",
-        SPACER, params.emission_probs.equal
-    );
-    eprintln!(
-        "{} match (not equal):       {:.3}",
-        SPACER, params.emission_probs.not_equal
-    );
-    eprintln!(
-        "{} insertion:               {:.3}",
-        SPACER, params.emission_probs.insertion
-    );
-    eprintln!(
-        "{} deletion:                {:.3}",
-        SPACER, params.emission_probs.deletion
-    );
-    eprintln!("");
-
-    Ok(params)
+    Ok(all_params)
 }

@@ -27,7 +27,7 @@ use bio::pattern_matching::bndm;
 use bio::stats::{LogProb, PHREDProb, Prob};
 use errors::*;
 use realignment::*;
-use rust_htslib::bam;
+// use rust_htslib::bam;
 use rust_htslib::bam::record::Cigar;
 use rust_htslib::bam::record::CigarStringView;
 use rust_htslib::bam::record::Record;
@@ -36,6 +36,7 @@ use util::*;
 use variants_and_fragments::*;
 use std::u32;
 use std::usize;
+use hashbrown::HashMap;
 
 static VERBOSE: bool = false;
 static IGNORE_INDEL_ONLY_CLUSTERS: bool = false;
@@ -821,6 +822,7 @@ pub fn extract_fragment(
     extract_params: ExtractFragmentParameters,
     align_params: AlignmentParameters,
     chrom: &String,
+    chrom_to_target_id: &HashMap<String, usize>
 ) -> Result<Option<Fragment>> {
     // TODO assert that every single variant in vars is on the same chromosome
     let id: String = u8_to_string(bam_record.qname())?;
@@ -860,6 +862,7 @@ pub fn extract_fragment(
     // populate a list with tuples of each variant, and anchor sequences for its alignment
     for ref var in vars {
         let var_interval = GenomicInterval {
+            tid: chrom_to_target_id[chrom] as u32,
             chrom: *chrom,
             start_pos: var.pos0 as u32,
             end_pos: var.pos0 as u32,
@@ -1016,6 +1019,7 @@ pub fn extract_fragments(
                         .chain_err(|| "Error creating augmented cigarlist.")?;
 
                 let interval = GenomicInterval {
+                    tid: bam_files_iteraction.chrom_to_target_id[chrom] as u32,
                     chrom: *chrom,
                     start_pos: start_pos as u32,
                     end_pos: end_pos as u32,
@@ -1049,6 +1053,7 @@ pub fn extract_fragments(
                     extract_params,
                     *allalign_params.get_params(bam_i),
                     chrom,
+                    &bam_files_iteraction.chrom_to_target_id
                 )
                 .chain_err(|| "Error extracting fragment from read.")?;
 
@@ -1154,7 +1159,7 @@ mod tests {
     fn generate_var2(ix: usize, tid: usize, pos0: usize, alleles: Vec<String>) -> Var {
         Var {
             ix: ix,
-            // tid: tid as u32,
+            tid: tid as u32,
             pos0: pos0,
             alleles: alleles,
             dp: 40,

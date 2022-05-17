@@ -1,0 +1,39 @@
+   Compiling longshot v0.4.3 (/home/denis/Documents/course_work_2021/git_repo/longshot)
+error[E0495]: cannot infer an appropriate lifetime for lifetime parameter in function call due to conflicting requirements
+   --> src/call_potential_snvs.rs:142:31
+    |
+142 |                 res.push(Some(self.bam_pileup[i].as_ref().unwrap()));
+    |                               ^^^^^^^^^^^^^^^^^^
+    |
+note: first, the lifetime cannot outlive the anonymous lifetime defined on the method body at 119:13...
+   --> src/call_potential_snvs.rs:119:13
+    |
+119 |     fn next(&mut self) -> Option<Self::Item> {
+    |             ^^^^^^^^^
+note: ...so that reference does not outlive borrowed content
+   --> src/call_potential_snvs.rs:142:31
+    |
+142 |                 res.push(Some(self.bam_pileup[i].as_ref().unwrap()));
+    |                               ^^^^^^^^^^^^^^^
+note: but, the lifetime must be valid for the lifetime `'a` as defined on the impl at 114:6...
+   --> src/call_potential_snvs.rs:114:6
+    |
+114 | impl<'a> Iterator for MultiplePileup<'a> { 
+    |      ^^
+note: ...so that the types are compatible
+   --> src/call_potential_snvs.rs:119:46
+    |
+119 |       fn next(&mut self) -> Option<Self::Item> {
+    |  ______________________________________________^
+120 | |
+121 | |         let min_pos = self.bam_pileup.iter().filter_map(|x| 
+122 | |             if let Some(p) = x {
+...   |
+161 | |         }
+162 | |     }
+    | |_____^
+    = note: expected `Iterator`
+               found `Iterator`
+
+For more information about this error, try `rustc --explain E0495`.
+error: could not compile `longshot` due to previous error
