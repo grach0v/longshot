@@ -277,7 +277,7 @@ pub fn parse_vcf_potential_variants(
     }
 
 
-    let vlst = VarList::new(varlist, bam_files_iteraction.target_names)?;
+    let vlst = VarList::new(varlist, bam_files_iteraction.target_names.clone())?;
     vlst.assert_sorted();
 
     Ok(vlst)

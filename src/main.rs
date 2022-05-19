@@ -534,7 +534,7 @@ fn run() -> Result<()> {
             );
             eprintln!("{} Estimating mean read coverage...", print_time());
 
-            let mean_coverage: f64 = calculate_mean_coverage(&bam_files_iteraction, &intervals)
+            let mean_coverage: f64 = calculate_mean_coverage(&mut bam_files_iteraction, &intervals)
                 .chain_err(|| "Error calculating numerator and denumerator of coverage for BAM file.")?;
 
             let calculated_max_cov =
@@ -588,7 +588,7 @@ fn run() -> Result<()> {
 
     // ??? looks like not good design
     let vec_parameters: Vec<AlignmentParameters> = estimate_alignment_parameters(
-        &bam_files_iteraction, 
+        &mut bam_files_iteraction, 
         &fasta_file, 
         &intervals,
         min_mapq, 
@@ -695,7 +695,7 @@ fn run() -> Result<()> {
         print_time()
     );
     let mut flist = extract_fragments::extract_fragments(
-        &bam_files_iteraction,
+        &mut bam_files_iteraction,
         &fasta_file,
         &mut varlist,
         &intervals,
@@ -917,7 +917,7 @@ fn run() -> Result<()> {
                 "{} Writing haplotype-assigned reads to bam files...",
                 print_time()
             );
-            separate_bam_reads_by_haplotype(&bam_files_iteraction, &intervals, filename, &h1, &h2, min_mapq)
+            separate_bam_reads_by_haplotype(&mut bam_files_iteraction, &intervals, filename, &h1, &h2, min_mapq)
                 .chain_err(|| "Error separating BAM reads by haplotype.")?;
         }
         None => {}

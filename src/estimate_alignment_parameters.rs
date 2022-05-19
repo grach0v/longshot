@@ -372,7 +372,7 @@ pub fn count_alignment_events(
 /// - ```IndexedFastaReadError```: error reading a record from the FASTA
 /// - Any errors incurred while creating the augmented cigar list or counting alignment events.
 pub fn estimate_alignment_parameters(
-    mut bam_files_iteraction: &OpenedBamFiles,
+    mut bam_files_iteraction: &mut OpenedBamFiles,
     fasta_file: &String,
     intervals: &Option<Vec<GenomicInterval>>,
     min_mapq: u8,
@@ -408,7 +408,7 @@ pub fn estimate_alignment_parameters(
     // let mut bam_ix =
     //     bam::IndexedReader::from_path(bam_file).chain_err(|| ErrorKind::IndexedBamOpenError)?;
 
-    let mut all_params: Vec<AlignmentParameters>;
+    let mut all_params: Vec<AlignmentParameters> = Vec::new();
 
     for mut bam_ix in &mut bam_files_iteraction.open_indexed_files {
 

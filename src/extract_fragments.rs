@@ -863,7 +863,7 @@ pub fn extract_fragment(
     for ref var in vars {
         let var_interval = GenomicInterval {
             tid: chrom_to_target_id[chrom] as u32,
-            chrom: *chrom,
+            chrom: chrom.clone(),
             start_pos: var.pos0 as u32,
             end_pos: var.pos0 as u32,
         };
@@ -956,7 +956,7 @@ pub fn extract_fragment(
 }
 
 pub fn extract_fragments(
-    bam_files_iteraction: &OpenedBamFiles,
+    bam_files_iteraction: &mut OpenedBamFiles,
     fastafile_name: &String,
     varlist: &mut VarList,
     intervals: &Option<Vec<GenomicInterval>>,
@@ -978,8 +978,11 @@ pub fn extract_fragments(
 
     for iv in interval_lst {
 
-        for (bam_i, bam_file) in bam_files_iteraction.open_indexed_files.into_iter().enumerate() {
-            let tid = bam_files_iteraction.chrom_to_tid[&iv.chrom][bam_i];
+        // for (bam_i, mut bam_file) in &mut bam_files_iteraction.open_indexed_files.iter().enumerate() {
+        let mut bam_i: i32 = -1;
+        for mut bam_file in &mut bam_files_iteraction.open_indexed_files {
+            bam_i += 1;
+            let tid = bam_files_iteraction.chrom_to_tid[&iv.chrom][bam_i as usize];
 
             bam_file.fetch((tid, iv.start_pos, iv.end_pos + 1))
                     .chain_err(|| ErrorKind::IndexedBamOpenError)?;
@@ -1020,7 +1023,7 @@ pub fn extract_fragments(
 
                 let interval = GenomicInterval {
                     tid: bam_files_iteraction.chrom_to_target_id[chrom] as u32,
-                    chrom: *chrom,
+                    chrom: chrom.clone(),
                     start_pos: start_pos as u32,
                     end_pos: end_pos as u32,
                 };
@@ -1049,9 +1052,9 @@ pub fn extract_fragments(
                     &cigarpos_list,
                     read_vars,
                     &ref_seq,
-                    &bam_files_iteraction.file_index_tid_to_chrom[bam_i],
+                    &bam_files_iteraction.file_index_tid_to_chrom[bam_i as usize],
                     extract_params,
-                    *allalign_params.get_params(bam_i),
+                    *allalign_params.get_params(bam_i as usize),
                     chrom,
                     &bam_files_iteraction.chrom_to_target_id
                 )

@@ -32,7 +32,7 @@ use util::{get_interval_lst, print_time, GenomicInterval, OpenedBamFiles};
 /// - ```BamHeaderTargetLenAccessError```: error accessing a target (contig) len from BAM header
 
 pub fn calculate_mean_coverage(
-    bam_files_iteraction: &OpenedBamFiles,
+    bam_files_iteraction: &mut OpenedBamFiles,
     intervals: &Option<Vec<GenomicInterval>>,
 ) -> Result<f64> {
 
@@ -43,15 +43,15 @@ pub fn calculate_mean_coverage(
 
     let iterable_intervals: Vec<Option<GenomicInterval>> = match intervals {
         Some(values) => {
-            values.into_iter().map(|x| Some(*x)).collect()
+            values.iter().map(|x| Some(x.clone())).collect()
         }
         None => {
             vec![None]
         }
     };
 
-    for bam_ix in bam_files_iteraction.open_indexed_files {
-        for interval in iterable_intervals {
+    for (mut bam_ix, bam) in bam_files_iteraction.open_indexed_files.iter_mut().zip(bam_files_iteraction.open_files.iter()) {
+        for interval in iterable_intervals.iter() {
             // count variables and etc
             let mut prev_tid = u32::MAX;
             let mut bam_covered_positions = 0; // total positions
@@ -61,7 +61,7 @@ pub fn calculate_mean_coverage(
             // interval_lst has either the single specified genomic region, or list of regions covering all chromosomes
             // for more information about this design decision, see get_interval_lst implementation in util.rs
 
-            for iv in interval_lst {
+            for iv in interval_lst.iter() {
                 bam_ix
                     .fetch((iv.tid, iv.start_pos, iv.end_pos + 1))
                     .chain_err(|| ErrorKind::IndexedBamFetchError)?;
@@ -75,7 +75,7 @@ pub fn calculate_mean_coverage(
                     // if we're on a different contig/chrom than the previous BAM record, we need to read
                     // in the sequence for that contig/chrom from the FASTA into the ref_seq vector
                     if tid != prev_tid {
-                        total_bam_ref_positions += bam_ix
+                        total_bam_ref_positions += bam
                             .header()
                             .target_len(tid)
                             .chain_err(|| ErrorKind::BamHeaderTargetLenAccessError)?;

@@ -109,7 +109,7 @@ pub fn print_vcf(
     
     let iterable_intervals: Vec<Option<GenomicInterval>> = match intervals {
         Some(values) => {
-            values.into_iter().map(|x| Some(*x)).collect()
+            values.into_iter().map(|x| Some(x.clone())).collect()
         }
         None => {
             vec![None]

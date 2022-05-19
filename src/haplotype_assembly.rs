@@ -104,7 +104,7 @@ pub fn separate_fragments_by_haplotype(
 
 // tag reads with haplotype and write to output bam file
 pub fn separate_bam_reads_by_haplotype<P: AsRef<std::path::Path>>(
-    bam_files_iteraction: &OpenedBamFiles,
+    bam_files_iteraction: &mut OpenedBamFiles,
     intervals: &Option<Vec<GenomicInterval>>,
     out_bam_file: P,
     h1: &HashMap<String, usize>,
@@ -117,13 +117,13 @@ pub fn separate_bam_reads_by_haplotype<P: AsRef<std::path::Path>>(
     // let mut bam_ix =
     //     bam::IndexedReader::from_path(bamfile_name).chain_err(|| ErrorKind::IndexedBamOpenError)?;
 
-    for bam_ix in bam_files_iteraction.open_indexed_files {
+    for mut bam_ix in &mut bam_files_iteraction.open_indexed_files {
 
         let header = bam::Header::from_template(&bam_ix.header());
         let mut out_bam = bam::Writer::from_path(&out_bam_file, &header, bam::Format::Bam)
             .chain_err(|| ErrorKind::BamWriterOpenError(out_bam_file.as_ref().display().to_string()))?;
 
-        for iv in interval_lst {
+        for iv in &interval_lst {
             bam_ix
                 .fetch((iv.tid, iv.start_pos, iv.end_pos + 1))
                 .chain_err(|| ErrorKind::IndexedBamFetchError)?;

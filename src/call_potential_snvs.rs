@@ -21,6 +21,8 @@ use util::*;
 // {FragCall, GenotypePriors, LnAlignmentParameters, GenomicInterval, Var, VarList, parse_target_names, u8_to_string};
 use variants_and_fragments::*;
 
+use hashbrown::HashMap;
+
 pub static VARLIST_CAPACITY: usize = 0; //1000000;
 static VERBOSE: bool = false; //true;
 
@@ -72,18 +74,19 @@ static VERBOSE: bool = false; //true;
 
 struct MultiplePileup <'a> {
     bam_pileup_iter: Vec<Option<Pileups<'a, IndexedReader>>>,
-    bam_pileup: Vec<Option<Pileup>>,
+    // bam_pileup: Vec<Option<Pileup>>,
     index_to_update: Vec<bool>,
 }
 
 impl<'a> MultiplePileup<'a> {
-    pub fn new(bam_files: &'a mut OpenedBamFiles, interval: GenomicInterval) -> MultiplePileup<'a> {
+    pub fn new(open_indexed_files: &'a mut Vec<rust_htslib::bam::IndexedReader>, 
+               chrom_to_tid: &HashMap<String, Vec<i32>>,
+               interval: GenomicInterval) -> MultiplePileup<'a> {
         
-        // let mut bam_ix_files: Vec<IndexedReader> = Vec::new();
         let mut bam_pileup_iter: Vec<Option<Pileups<IndexedReader>>> = Vec::new();
 
-        for (bam_index, bam) in bam_files.open_indexed_files.iter_mut().enumerate() {
-            let tid = bam_files.chrom_to_tid[&interval.chrom][bam_index];
+        for (bam_index, bam) in open_indexed_files.iter_mut().enumerate() {
+            let tid = chrom_to_tid[&interval.chrom][bam_index];
 
             if tid == -1 {
                 bam_pileup_iter.push(None);
@@ -94,32 +97,32 @@ impl<'a> MultiplePileup<'a> {
             bam_pileup_iter.push(Some(bam.pileup()));
         }
 
-        let bam_pileup: Vec<Option<Pileup>> = bam_pileup_iter.iter_mut().map(|x|
-            {
-                if let Some(pileups) = x {
-                    if let Some(p) = pileups.next() {
-                        return Some(p.unwrap_or_else(|e| panic!("{}", e)));
-                    }
-                }
-                None
-            }
-        ).collect();
+        // let bam_pileup: Vec<Option<Pileup>> = bam_pileup_iter.iter_mut().map(|x|
+        //     {
+        //         if let Some(pileups) = x {
+        //             if let Some(p) = pileups.next() {
+        //                 return Some(p.unwrap_or_else(|e| panic!("{}", e)));
+        //             }
+        //         }
+        //         None
+        //     }
+        // ).collect();
 
         let index_to_update: Vec<bool> = vec![true; bam_pileup_iter.len()];
         MultiplePileup {
             bam_pileup_iter,
-            bam_pileup,
+            // bam_pileup,
             index_to_update,
         }
     }
 }
 
-impl<'a>  MultiplePileup<'a> { 
+impl<'a> Iterator for MultiplePileup<'a> { 
     // returs Vec of Option<Pileup> size of number of bamfiles, 
 
-    // type Item = Vec<Option<&'a Pileup>>;
+    type Item = Vec<Option<Pileup>>;
 
-    fn next(&'a mut self) -> Option<Vec<Option<&'a Pileup>>> {
+    fn next(&mut self) -> Option<Self::Item> {
 
         // for i in &self.index_to_update {
         //     // Update pos
@@ -129,7 +132,7 @@ impl<'a>  MultiplePileup<'a> {
         //     }; 
         // }
 
-        self.bam_pileup = self.bam_pileup_iter.iter_mut().zip(self.index_to_update.iter()).map(|(x, is_update)|
+        let bam_pileup: Vec<Option<Pileup>> = self.bam_pileup_iter.iter_mut().zip(self.index_to_update.iter()).map(|(x, is_update)|
             {
                 if *is_update {
                     if let Some(pileups) = x {
@@ -145,7 +148,7 @@ impl<'a>  MultiplePileup<'a> {
 
         // self.index_to_update.clear();
 
-        let min_pos = self.bam_pileup.iter().filter_map(|x| 
+        let min_pos = bam_pileup.iter().filter_map(|x| 
             if let Some(p) = x {
                 Some(p.pos())
             } else {
@@ -159,24 +162,37 @@ impl<'a>  MultiplePileup<'a> {
 
         let min_pos = min_pos.unwrap();
 
-        let mut res: Vec<Option<&'a Pileup>> = Vec::with_capacity(self.bam_pileup.len());
+        // let mut res: Vec<Option<Pileup>> = Vec::with_capacity(bam_pileup.len());
 
         let mut is_end = true;
 
-        for i in 0..self.bam_pileup.len() {
-            if !self.bam_pileup[i].is_none() && self.bam_pileup[i].as_ref().unwrap().pos() == min_pos { 
-                // Save min pos alignments
-                res.push(Some(self.bam_pileup[i].as_ref().unwrap()));
-
-                self.index_to_update[i] = true;
-
-                is_end = false;
-
-            } else {
-                self.index_to_update[i] = false;
-                res.push(None);
+        let res: Vec<Option<Pileup>> = bam_pileup.into_iter().enumerate().map(|(i, p)| 
+            {
+                if !p.is_none() && p.as_ref().unwrap().pos() == min_pos {
+                    self.index_to_update[i] = true;
+                    is_end = false;
+                    return p;
+                } else {
+                    self.index_to_update[i] = false;
+                    return None;
+                }
             }
-        }
+        ).collect();
+
+        // for i in 0..bam_pileup.len() {
+        //     if !bam_pileup[i].is_none() && bam_pileup[i].as_ref().unwrap().pos() == min_pos { 
+        //         // Save min pos alignments
+        //         res.push(Some(bam_pileup[i].unwrap()));
+
+        //         self.index_to_update[i] = true;
+
+        //         is_end = false;
+
+        //     } else {
+        //         self.index_to_update[i] = false;
+        //         res.push(None);
+        //     }
+        // }
         
         if is_end {
             None
@@ -188,17 +204,17 @@ impl<'a>  MultiplePileup<'a> {
 
 // My Alignments 
 struct MyAlignments<'a> {
-    pileups: &'a Vec<Option<&'a Pileup>>,
+    pileups: &'a Vec<Option<Pileup>>,
     curr_ix: usize,
     alignments: Alignments<'a>,
 }
 
 impl<'a> MyAlignments<'a> {
-    pub fn new (pileups: &'a Vec<Option<&Pileup>>, ) -> Self {
+    pub fn new (pileups: &'a Vec<Option<Pileup>>, ) -> Self {
         Self {
             pileups,
             curr_ix: 0,
-            alignments: pileups[0].unwrap().alignments(),
+            alignments: pileups[0].as_ref().unwrap().alignments(),
         }
     }
 }
@@ -218,7 +234,7 @@ impl<'a> Iterator for MyAlignments<'a> {
                 return None;
             }
 
-            if let Some(p) = self.pileups[self.curr_ix] {
+            if let Some(p) = &self.pileups[self.curr_ix] {
                 self.alignments = p.alignments();
             }
         }            
@@ -297,22 +313,21 @@ pub fn call_potential_snvs(
     // genomic intervals for each chromosome covering the entire genome
     for iv in interval_lst {
 
-        let mut mul_pileup = MultiplePileup::new(bam_files_iteraction, iv);
+        let mut mul_pileup = MultiplePileup::new(&mut bam_files_iteraction.open_indexed_files, &bam_files_iteraction.chrom_to_tid, iv);
 
         // this variable is used to avoid having a variant inside a previous variant's deletion.
         let mut next_valid_pos = 0;
 
         // iterate over base pileup
         // PLS HELP ME FIX THIS PLS
+        
+        for pileup in mul_pileup {
 
-        let pileup_iter = mul_pileup.next();
-        while let Some(pileup) = pileup_iter {
-
-            let (first_present, p): (usize, &Option<&Pileup>) = pileup.iter().enumerate().find(|(_i, &p)| p.is_some()).unwrap();
-            let p = p.unwrap();
+            let (first_present, p): (usize, &Option<Pileup>) = pileup.iter().enumerate().find(|(_i, p)| p.is_some()).unwrap();
+            let p = p.as_ref().unwrap();
 
             let tid = p.tid() as usize;
-            let chrom: String = bam_files_iteraction.file_index_tid_to_chrom[first_present][tid];
+            let chrom: &String = &(bam_files_iteraction.file_index_tid_to_chrom[first_present][tid]);
 
             // if we're on a different contig/chrom, we need to read in the sequence for that
             // contig/chrom from the FASTA into the ref_seq vector
@@ -332,7 +347,7 @@ pub fn call_potential_snvs(
             prev_tid = tid;
 
             // this is specifically to avoid having a variant inside a previous variant's deletion.
-            if pileup[first_present].unwrap().pos() < next_valid_pos {
+            if pileup[first_present].as_ref().unwrap().pos() < next_valid_pos {
                 continue;
             }
 
@@ -347,7 +362,7 @@ pub fn call_potential_snvs(
             // let mut depth: usize = 0;
 
             let mut depth: Vec<usize> = vec![0; pileup.len()];
-            let pos: usize = pileup[first_present].unwrap().pos() as usize;
+            let pos: usize = pileup[first_present].as_ref().unwrap().pos() as usize;
             let ref_allele = (ref_seq[pos] as char).to_ascii_uppercase();
 
             if ref_allele == 'N' {
@@ -559,11 +574,11 @@ pub fn call_potential_snvs(
             // check if SNV meets our quality criteria for a potential SNV
             // if it does, make a new variant and add it to the list of potential SNVs.
             if snv_qual > potential_snv_cutoff && ref_allele != 'N' && var_allele != 'N' {
-                let tid: usize = pileup[first_present].unwrap().tid() as usize;
-                let chrom: String = bam_files_iteraction.file_index_tid_to_chrom[first_present][tid];
+                let tid: usize = pileup[first_present].as_ref().unwrap().tid() as usize;
+                let chrom: &String = &bam_files_iteraction.file_index_tid_to_chrom[first_present][tid];
 
                 let new_var = Var {
-                    tid: bam_files_iteraction.chrom_to_target_id[&chrom] as u32,
+                    tid: bam_files_iteraction.chrom_to_target_id[chrom] as u32,
                     ix: 0,
                     // these will be set automatically,
                     pos0: pos,
@@ -596,11 +611,13 @@ pub fn call_potential_snvs(
                 };
 
                 // we don't want potential SNVs that are inside a deletion, for instance.
-                next_valid_pos = pileup[first_present].unwrap().pos() + 1;
+                next_valid_pos = pileup[first_present].as_ref().unwrap().pos() + 1;
 
                 varlist.push(new_var);
             }
+        
         }
+    
     }
     // return the vector of Vars as a VarList struct
     Ok(VarList::new(varlist, bam_files_iteraction.target_names.clone())?)

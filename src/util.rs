@@ -213,30 +213,37 @@ impl OpenedBamFiles {
         // And chrom_to_len
         // and file_index_tid_to_chrom
 
-        let mut chrom_to_tid: HashMap<String, Vec<i32>>;
-        let mut chrom_to_len: HashMap<String, u32>;
-        let mut file_index_tid_to_chrom: Vec<Vec<String>>;
+        let mut chrom_to_tid: HashMap<String, Vec<i32>> = HashMap::new();
+        let mut chrom_to_len: HashMap<String, u32> = HashMap::new();
+        let mut file_index_tid_to_chrom: Vec<Vec<String>> = Vec::new();
 
-        for (bam_index, bam) in bam_files.into_iter().enumerate() {
+        for (bam_index, bam) in bam_files.iter().enumerate() {
             let cur_names = parse_target_names_opened(&bam)?;
             file_index_tid_to_chrom.push(vec![]);
 
-            for chrom in chrom_to_tid.keys() {
-                // let Some(vec) = chrom_to_tid.get(chrom);
-                let vec = chrom_to_tid.get(chrom).unwrap();
-                vec.push(-1);
+            // for chrom in chrom_to_tid.keys() {
+            //     // let Some(vec) = chrom_to_tid.get(chrom);
+            //     let mut vec: &mut Vec<i32> = chrom_to_tid.get_mut(chrom).unwrap();
+            //     vec.push(-1);
+            // }
+
+            for chrom_vec in chrom_to_tid.values_mut() {
+                chrom_vec.push(-1);
             }
 
-            for (chrom, chrom_index) in cur_names.into_iter().zip(0 .. cur_names.len()) {
-                file_index_tid_to_chrom[file_index_tid_to_chrom.len() - 1].push(chrom);
+            let cur_names_length = cur_names.len();
+            for (chrom, chrom_index) in cur_names.into_iter().zip(0 .. cur_names_length) {
+                let file_index_length = file_index_tid_to_chrom.len();
+                file_index_tid_to_chrom[file_index_length - 1].push(chrom.clone());
 
                 let tlen = bam
                     .header()
                     .target_len(chrom_index as u32)
                     .chain_err(|| ErrorKind::BamHeaderTargetLenAccessError)? as u32;
 
-                if let (Some(vec), Some(&len)) = (chrom_to_tid.get(&chrom), chrom_to_len.get(&chrom)) {
-                    vec[vec.len() - 1] = chrom_index as i32;
+                if let (Some(vec), Some(&len)) = (chrom_to_tid.get_mut(&chrom), chrom_to_len.get(&chrom)) {
+                    let vec_length = vec.len();
+                    vec[vec_length - 1] = chrom_index as i32;
 
                     ensure! (
                         tlen == len,
@@ -246,9 +253,9 @@ impl OpenedBamFiles {
                 } else {
                     let mut new_vec = vec![-1; bam_index];
                     new_vec.push(chrom_index as i32);
-                    chrom_to_tid.insert(chrom, new_vec);
+                    chrom_to_tid.insert(chrom.clone(), new_vec);
 
-                    chrom_to_len.insert(chrom, tlen);
+                    chrom_to_len.insert(chrom.clone(), tlen);
                 }
             }
         }
@@ -261,6 +268,7 @@ impl OpenedBamFiles {
         //                                              .map(|(tid, name)| (name, tid))
         //                                              .collect::<Vec<(String, usize)>>();
 
+        let chrom_to_target_id: HashMap<String, usize> = target_names.iter().enumerate().map(|(i, name)| (name.clone(), i)).collect();
 
         Ok(
             OpenedBamFiles {
@@ -271,7 +279,7 @@ impl OpenedBamFiles {
                 chrom_to_len: chrom_to_len,
                 file_index_tid_to_chrom: file_index_tid_to_chrom,
                 target_names: target_names,
-                chrom_to_target_id: target_names.into_iter().enumerate().map(|(i, name)| (name, i)).collect(),
+                chrom_to_target_id: chrom_to_target_id,
             }
         )
     }
@@ -375,12 +383,12 @@ pub fn get_whole_genome_intervals(bam_files_iteraction: &OpenedBamFiles) -> Resu
     //     });
     // }
 
-    for chrom in bam_files_iteraction.target_names {
+    for chrom in &bam_files_iteraction.target_names {
         intervals.push(GenomicInterval {
-            tid: bam_files_iteraction.chrom_to_target_id[&chrom] as u32,
-            chrom: chrom,
+            tid: bam_files_iteraction.chrom_to_target_id[chrom] as u32,
+            chrom: chrom.clone(),
             start_pos: 0,
-            end_pos: bam_files_iteraction.chrom_to_len[&chrom] - 1
+            end_pos: bam_files_iteraction.chrom_to_len[chrom] - 1
         });
     }
 
