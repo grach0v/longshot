@@ -113,8 +113,8 @@ fn run() -> Result<()> {
         //.author("Peter Edge <edge.peterj@gmail.com>")
         //.about("variant caller (SNVs) for long-read sequencing data")
 
-        .arg(Arg::with_name("Input BAM or CRAM by clusters")
-                .short("bs")
+        .arg(Arg::with_name("Input BAMs or CRAMs")
+                .short("b")
                 .long("bams")
                 .value_name("BAMs")
                 .help("sorted, indexed BAM file with error-prone reads")
