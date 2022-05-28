@@ -195,8 +195,6 @@ pub struct OpenedBamFiles {
 
 impl OpenedBamFiles {
     pub fn new(names: Vec<String>) -> Result<OpenedBamFiles> {
-        // Create open_files
-        // ??? 
         let bam_files: Vec<rust_htslib::bam::Reader> = names
             .iter()
             .map(|name| bam::Reader::from_path(name)
@@ -221,18 +219,11 @@ impl OpenedBamFiles {
             let cur_names = parse_target_names_opened(&bam)?;
             file_index_tid_to_chrom.push(vec![]);
 
-            // for chrom in chrom_to_tid.keys() {
-            //     // let Some(vec) = chrom_to_tid.get(chrom);
-            //     let mut vec: &mut Vec<i32> = chrom_to_tid.get_mut(chrom).unwrap();
-            //     vec.push(-1);
-            // }
-
             for chrom_vec in chrom_to_tid.values_mut() {
                 chrom_vec.push(-1);
             }
 
-            let cur_names_length = cur_names.len();
-            for (chrom, chrom_index) in cur_names.into_iter().zip(0 .. cur_names_length) {
+            for (chrom_index, chrom) in cur_names.into_iter().enumerate() {
                 let file_index_length = file_index_tid_to_chrom.len();
                 file_index_tid_to_chrom[file_index_length - 1].push(chrom.clone());
 
@@ -261,14 +252,9 @@ impl OpenedBamFiles {
         }
 
         let target_names: Vec<String> = chrom_to_len.keys().cloned().collect();
-        // let chrom_to_target_id = HashMap::from(target_names.enumerate().map(|tid, name| (tid, name)))
-
-        // let test: Vec<(String, usize)> = target_names.into_iter()
-        //                                              .enumerate()
-        //                                              .map(|(tid, name)| (name, tid))
-        //                                              .collect::<Vec<(String, usize)>>();
-
-        let chrom_to_target_id: HashMap<String, usize> = target_names.iter().enumerate().map(|(i, name)| (name.clone(), i)).collect();
+        let chrom_to_target_id: HashMap<String, usize> = target_names.iter().enumerate()
+            .map(|(i, name)| (name.clone(), i))
+            .collect();
 
         Ok(
             OpenedBamFiles {

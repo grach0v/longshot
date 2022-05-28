@@ -6,7 +6,7 @@
 // `error_chain!` can recurse deeply
 #![recursion_limit = "1024"]
 
-// external crates
+// external crat
 extern crate bio;
 extern crate chrono;
 extern crate clap;
@@ -586,14 +586,14 @@ fn run() -> Result<()> {
         store_read_id,
     };
 
-    // ??? looks like not good design
+    eprintln!("{} Estimating alignment parameters...", print_time());
     let vec_parameters: Vec<AlignmentParameters> = estimate_alignment_parameters(
         &mut bam_files_iteraction, 
         &fasta_file, 
         &intervals,
         min_mapq, 
         max_cigar_indel as u32
-    )?;
+    ).chain_err(|| "Error estimating alignment parameters.")?;
     
     // ??? constructor
     let all_alignment_parameters = AllAlignParams::new(&vec_parameters);

@@ -378,29 +378,10 @@ pub fn estimate_alignment_parameters(
     min_mapq: u8,
     max_cigar_indel: u32,
 ) -> Result<Vec<AlignmentParameters>> {
-    let t_names = &bam_files_iteraction.target_names;
+    // let t_names = &bam_files_iteraction.target_names;
 
-    let mut prev_tid = usize::MAX;
     let mut fasta = fasta::IndexedReader::from_file(fasta_file)
         .chain_err(|| ErrorKind::IndexedFastaOpenError)?;
-    let mut ref_seq: Vec<char> = vec![];
-
-    // initial transition and emission counts
-    // set everything to 1 so that it's impossible to have e.g. divide by 0 errors
-    let mut transition_counts = TransitionCounts {
-        match_from_match: 1,
-        insertion_from_match: 1,
-        deletion_from_match: 1,
-        insertion_from_insertion: 1,
-        match_from_insertion: 1,
-        deletion_from_deletion: 1,
-        match_from_deletion: 1,
-    };
-
-    let mut emission_counts = EmissionCounts {
-        equal: 1,
-        not_equal: 1,
-    };
 
     // interval_lst has either the single specified genomic region, or list of regions covering all chromosomes
     // for more information about this design decision, see get_interval_lst implementation in util.rs
@@ -410,15 +391,52 @@ pub fn estimate_alignment_parameters(
 
     let mut all_params: Vec<AlignmentParameters> = Vec::new();
 
-    for mut bam_ix in &mut bam_files_iteraction.open_indexed_files {
+
+    eprintln!("Number of Bam files {}", bam_files_iteraction.open_indexed_files.len());
+    eprintln!("Number of intervals {}", interval_lst.len());
+
+    for (bam_file_number, mut bam_ix) in bam_files_iteraction.open_indexed_files.iter_mut().enumerate() {
+        let mut nreads = 0; 
+        let mut prev_tid = usize::MAX;
+
+        let mut ref_seq: Vec<char> = vec![];
+
+        // initial transition and emission counts
+        // set everything to 1 so that it's impossible to have e.g. divide by 0 errors
+        let mut transition_counts = TransitionCounts {
+            match_from_match: 1,
+            insertion_from_match: 1,
+            deletion_from_match: 1,
+            insertion_from_insertion: 1,
+            match_from_insertion: 1,
+            deletion_from_deletion: 1,
+            match_from_deletion: 1,
+        };
+    
+        let mut emission_counts = EmissionCounts {
+            equal: 1,
+            not_equal: 1,
+        };
 
         for iv in &interval_lst {
 
+            let chrom = &iv.chrom;
+            let tid = bam_files_iteraction.chrom_to_tid[chrom][bam_file_number];
+
+            if tid == -1 {
+                continue;
+            }
+
+            eprintln!("tid {} start {} end {}", tid, iv.start_pos, iv.end_pos + 1);
+
             bam_ix
-                .fetch((iv.tid, iv.start_pos, iv.end_pos + 1))
+                .fetch((tid, iv.start_pos, iv.end_pos + 1))
                 .chain_err(|| ErrorKind::IndexedBamFetchError)?;
 
             for r in bam_ix.records() {
+
+                // eprint!("Iteration over record");
+                
                 let record = r.chain_err(|| ErrorKind::IndexedBamRecordReadError)?;
 
                 // check that the read doesn't fail any standard filters
@@ -435,7 +453,11 @@ pub fn estimate_alignment_parameters(
                 // if we're on a different contig/chrom than the previous BAM record, we need to read
                 // in the sequence for that contig/chrom from the FASTA into the ref_seq vector
                 let tid: usize = record.tid() as usize;
-                let chrom: String = t_names[record.tid() as usize].clone();
+                // let chrom: String = t_names[record.tid() as usize].clone();
+                let chrom: String = bam_files_iteraction.file_index_tid_to_chrom[bam_file_number][tid].clone();
+
+                // eprintln!("tid {} chrom {} prev_tid {}", tid, chrom, prev_tid);
+
                 if tid != prev_tid {
                     let mut ref_seq_u8: Vec<u8> = vec![];
                     fasta
@@ -466,8 +488,11 @@ pub fn estimate_alignment_parameters(
                 emission_counts.add(read_emission_counts);
 
                 prev_tid = tid;
+                nreads += 1;
             }
         }
+
+        eprintln!("number of reads {}", nreads);
 
         // place the transition and emission counts together in an AlignmentCounts struct
         let alignment_counts = AlignmentCounts {
