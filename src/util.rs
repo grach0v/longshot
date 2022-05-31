@@ -256,6 +256,8 @@ impl OpenedBamFiles {
             .map(|(i, name)| (name.clone(), i))
             .collect();
 
+        
+
         Ok(
             OpenedBamFiles {
                 file_names: names,

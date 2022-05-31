@@ -379,7 +379,6 @@ fn run() -> Result<()> {
     {
         Some(regions) => {
             regions.map(|region| parse_region_string(region, &bam_files_iteraction.chrom_to_len, &bam_files_iteraction.chrom_to_target_id).ok()).collect()
-            // bamfile_names.into_iter().zip(regions.into_iter()).map(|(bam_file, region)| parse_region_string(region, &bam_file).ok()).collect()
         }
         None => None,
     };

@@ -211,10 +211,12 @@ struct MyAlignments<'a> {
 
 impl<'a> MyAlignments<'a> {
     pub fn new (pileups: &'a Vec<Option<Pileup>>, ) -> Self {
+        let (min_ix, _) = pileups.iter().enumerate().find(|(ix, p)| !p.is_none()).unwrap();
+
         Self {
             pileups,
-            curr_ix: 0,
-            alignments: pileups[0].as_ref().unwrap().alignments(),
+            curr_ix: min_ix,
+            alignments: pileups[min_ix].as_ref().unwrap().alignments(),
         }
     }
 }
